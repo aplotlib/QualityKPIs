@@ -3,8 +3,7 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
-from streamlit_gsheets import GSheetsConnection
-from datetime import datetime
+# from streamlit_gsheets import GSheetsConnection # No longer needed for now
 import traceback
 import json
 from typing import List, Dict, Any, Optional
@@ -72,58 +71,68 @@ st.markdown("""
 
 
 # --- DATA LOADING AND TRANSFORMATION ---
-@st.cache_data(ttl=3600)  # Cache data for 1 hour
+@st.cache_data(ttl=3600)
 def load_and_transform_data() -> pd.DataFrame:
     """
-    Connects to Google Sheets, parses the complex multi-table format,
+    Parses a complex multi-table format from the embedded sample data
     and returns a clean, tidy DataFrame for analysis.
-
-    The parsing logic is a state machine that reads the sheet contextually,
-    identifying metric blocks, headers, and data rows.
     """
     try:
         # --- Constants for Sheet Structure ---
-        # These indices correspond to column letters in the sheet (A=0, B=1, etc.)
-        COL_METRIC_TITLE = 2  # Column C
-        COL_YEAR = 3          # Column D
-        COL_CHANNEL = 4       # Column E
-        COL_MONTHS_START = 5  # Column F
+        COL_METRIC_TITLE, COL_YEAR, COL_CHANNEL, COL_MONTHS_START = 2, 3, 4, 5
 
-        conn = st.connection("gsheets", type=GSheetsConnection)
-        # Ensure your worksheet is named "Data" or change the string below
-        raw_data = conn.read(worksheet="Data", header=None).fillna('').astype(str)
+        # --- EMBEDDED SAMPLE DATA ---
+        # This section replaces the live Google Sheets connection.
+        # To switch back, remove this list and uncomment the 'st.connection' line.
+        sample_raw_data = [
+            ['', '', 'Overall Return Rate (%)', '', '', '', '', '', '', '', '', ''],
+            ['', '', '', '', '', 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'],
+            ['', '', '', '2024', 'Amazon', '5.1%', '5.3%', '5.0%', '4.8%', '4.9%', '5.2%'],
+            ['', '', '', '2024', 'Walmart', '6.2%', '6.0%', '6.1%', '5.9%', '5.8%', '6.3%'],
+            ['', '', '', '2024', 'Overall', '5.5%', '5.6%', '5.4%', '5.2%', '5.3%', '5.7%'],
+            ['', '', '', '2023', 'Amazon', '4.8%', '4.9%', '4.7%', '4.6%', '4.7%', '4.8%', '4.9%', '5.0%', '5.1%', '5.2%', '5.3%', '5.4%'],
+            ['', '', '', '2023', 'Walmart', '5.9%', '5.8%', '5.7%', '5.6%', '5.5%', '5.6%', '5.7%', '5.8%', '5.9%', '6.0%', '6.1%', '6.2%'],
+            ['', '', '', '2023', 'Overall', '5.2%', '5.3%', '5.1%', '5.0%', '5.1%', '5.2%', '5.3%', '5.4%', '5.5%', '5.6%', '5.7%', '5.8%'],
+            ['', '', '', '', '', '', '', '', '', '', '', ''],
+            ['', '', 'Support Ticket Cost ($)', '', '', '', '', '', '', '', '', ''],
+            ['', '', '', '', '', 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'],
+            ['', '', '', '2024', 'Phone Support', '12.50', '12.55', '12.48', '12.60', '12.65', '12.70'],
+            ['', '', '', '2024', 'Email Support', '8.10', '8.05', '8.15', '8.20', '8.25', '8.30'],
+            ['', '', '', '2024', 'Overall', '10.30', '10.30', '10.32', '10.40', '10.45', '10.50'],
+            ['', '', '', '2023', 'Phone Support', '11.80', '11.85', '11.90', '11.95', '12.00', '12.05', '12.10', '12.15', '12.20', '12.25', '12.30', '12.40'],
+            ['', '', '', '2023', 'Email Support', '7.50', '7.55', '7.60', '7.65', '7.70', '7.75', '7.80', '7.85', '7.90', '7.95', '8.00', '8.05'],
+            ['', '', '', '2023', 'Overall', '9.65', '9.70', '9.75', '9.80', '9.85', '9.90', '9.95', '10.00', '10.05', '10.10', '10.15', '10.23'],
+        ]
+        # Use the sample data to create a DataFrame
+        raw_data = pd.DataFrame(sample_raw_data).fillna('').astype(str)
+
+        # --- LIVE DATA CONNECTION (Currently disabled) ---
+        # conn = st.connection("gsheets", type=GSheetsConnection)
+        # raw_data = conn.read(worksheet=799906691, header=None).fillna('').astype(str)
+        # ---
 
         all_metrics_data = []
         current_metric: Optional[str] = None
         current_months: List[str] = []
         current_year: Optional[int] = None
 
-        # Iterate through each row to parse the sheet contextually
         for _, row_series in raw_data.iterrows():
             row = row_series.tolist()
 
-            # Condition 1: Is this a METRIC TITLE row? (e.g., "Overall Return Rate")
-            # It has text in the metric title column and is empty in year/channel.
             is_metric_title = row[COL_METRIC_TITLE] and not row[COL_YEAR] and not row[COL_CHANNEL]
             if is_metric_title:
                 current_metric = row[COL_METRIC_TITLE]
-                current_months, current_year = [], None  # Reset for new metric block
+                current_months, current_year = [], None
                 continue
 
-            # Condition 2: Is this a MONTH HEADER row? (e.g., "Jan", "Feb", ...)
-            # We use "Jan" as a key indicator for this row.
             is_month_header = row[COL_MONTHS_START] == 'Jan'
             if is_month_header:
-                # Filter out summary columns like "Total" or "AVG"
                 current_months = [m for m in row[COL_MONTHS_START:] if m and 'Total' not in m and 'AVG' not in m]
                 continue
 
-            # Condition 3: Is this a DATA row?
-            # A data row requires a metric, year, and month context to have been established.
             if not (current_metric and current_months):
                 continue
 
-            # Update the current year if a new one is found in the year column.
             if row[COL_YEAR].isnumeric():
                 current_year = int(float(row[COL_YEAR]))
 
@@ -135,15 +144,12 @@ def load_and_transform_data() -> pd.DataFrame:
                 for month, value in zip(current_months, values):
                     if value:
                         all_metrics_data.append({
-                            'Metric': current_metric,
-                            'Year': current_year,
-                            'Channel': channel,
-                            'Month': month,
-                            'Value': value
+                            'Metric': current_metric, 'Year': current_year, 'Channel': channel,
+                            'Month': month, 'Value': value
                         })
 
         if not all_metrics_data:
-            st.error("Could not parse any data. Please verify the sheet structure.")
+            st.error("Could not parse any data from the embedded source.")
             return pd.DataFrame()
 
         df = pd.DataFrame(all_metrics_data)
@@ -166,15 +172,11 @@ def load_and_transform_data() -> pd.DataFrame:
 
         # --- Calculate YoY Change ---
         df = df.sort_values(by=['Metric', 'Channel', 'Date'])
-        # A robust way to calculate YoY change is to merge the dataframe with itself on a 1-year offset.
         df_prev_year = df.copy()
         df_prev_year['Date'] = df_prev_year['Date'] + pd.DateOffset(years=1)
         df = pd.merge(
-            df,
-            df_prev_year[['Metric', 'Channel', 'Date', 'Value']],
-            on=['Metric', 'Channel', 'Date'],
-            how='left',
-            suffixes=('', '_prev_year')
+            df, df_prev_year[['Metric', 'Channel', 'Date', 'Value']],
+            on=['Metric', 'Channel', 'Date'], how='left', suffixes=('', '_prev_year')
         )
         df['YoY Change'] = df['Value'] - df['Value_prev_year']
 
@@ -241,7 +243,6 @@ class AIDashboardGenerator:
                 response = client.chat.completions.create(model=model_name, messages=[{"role": "user", "content": prompt}], response_format={"type": "json_object"})
                 content = response.choices[0].message.content
 
-            # Clean up potential markdown code fences
             if content.strip().startswith("```json"):
                 content = content.strip()[7:-4]
 
@@ -285,31 +286,27 @@ def render_kpi_summary(df: pd.DataFrame, metric: str, year: int):
     st.subheader(f"Executive Summary: {metric} ({year})")
 
     channels = sorted(df_metric['Channel'].unique())
-    # Create a responsive grid, max 4 columns
     num_columns = min(len(channels), 4)
     cols = st.columns(num_columns) if channels else [st.container()]
 
     is_percent = '%' in metric
-    is_currency = 'cost' in metric.lower() or 'revenue' in metric.lower()
+    is_currency = '$' in metric
     lower_is_better = 'rate' in metric.lower() or 'cost' in metric.lower()
 
     for i, channel in enumerate(channels):
         col = cols[i % num_columns]
         latest_data = df_metric[df_metric['Channel'] == channel].sort_values('Date').iloc[-1]
 
-        # Format main value
         value_format = "{:,.2%}" if is_percent else ("${:,.2f}" if is_currency else "{:,.0f}")
         val_display = value_format.format(latest_data['Value'])
 
-        # Format delta (YoY Change)
         yoy_change = latest_data['YoY Change']
         delta_display = "No prior year data"
         if pd.notna(yoy_change):
-            # Display as a percentage point change, not a multiplier.
             delta_format = "{:+.2f} pts" if is_percent else ("${:,.2f}" if is_currency else "{:+.0f}")
             delta_display = f"{delta_format.format(yoy_change)} vs. prior year"
 
-        metric_card = col.metric(
+        col.metric(
             label=f"{channel} ({latest_data['Date'].strftime('%b %Y')})",
             value=val_display,
             delta=delta_display,
@@ -334,25 +331,22 @@ def render_line_chart(df: pd.DataFrame, title: str, metric: str, year: int):
 
     for i, channel in enumerate(channels):
         color = colors[i % len(colors)]
-        # Current Year Data
         df_ch = df_current_year[df_current_year['Channel'] == channel].sort_values('Date')
         if not df_ch.empty:
             fig.add_trace(go.Scatter(x=df_ch['Date'].dt.month, y=df_ch['Value'], name=f'{channel} ({year})',
                                      mode='lines+markers', line=dict(color=color, width=3)))
-            # Add annotation for the latest point
             latest_pt = df_ch.iloc[-1]
-            fig.add_annotation(x=latest_pt['Date'].month, y=latest_pt['Value'], text=f"{latest_pt['Value']:.2%}" if '%' in metric else f"{latest_pt['Value']:.0f}",
+            fig.add_annotation(x=latest_pt['Date'].month, y=latest_pt['Value'], text=f"{latest_pt['Value']:.2%}" if '%' in metric else f"${latest_pt['Value']:.2f}",
                                showarrow=True, arrowhead=2, ax=0, ay=-40, bordercolor="#c7c7c7", borderwidth=2, bgcolor="rgba(255,255,255,0.8)")
 
-        # Previous Year Data
         df_ch_prev = df_previous_year[df_previous_year['Channel'] == channel].sort_values('Date')
         if not df_ch_prev.empty:
             fig.add_trace(go.Scatter(x=df_ch_prev['Date'].dt.month, y=df_ch_prev['Value'], name=f'{channel} ({year - 1})',
                                      mode='lines', line=dict(color=color, width=2, dash='dash')))
 
     is_percent = '%' in metric
-    is_currency = 'cost' in metric.lower() or 'revenue' in metric.lower()
-    yaxis_tickformat = '.1%' if is_percent else ('$,.0f' if is_currency else ',.0f')
+    is_currency = '$' in metric
+    yaxis_tickformat = '.1%' if is_percent else ('$,.2f' if is_currency else ',.0f')
 
     fig.update_layout(
         template="plotly_dark",
@@ -361,8 +355,7 @@ def render_line_chart(df: pd.DataFrame, title: str, metric: str, year: int):
         paper_bgcolor='rgba(0,0,0,0)',
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
         xaxis=dict(
-            tickmode='array',
-            tickvals=list(range(1, 13)),
+            tickmode='array', tickvals=list(range(1, 13)),
             ticktext=['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
         )
     )
@@ -375,7 +368,7 @@ st.title("📊 Quality Department KPI Dashboard")
 df = load_and_transform_data()
 
 if df.empty:
-    st.warning("Data could not be loaded. Please ensure the Google Sheet is shared correctly and the format is as expected.")
+    st.warning("Data could not be loaded. Please check the data source and format.")
     st.stop()
 
 # --- SIDEBAR CONTROLS ---
@@ -397,7 +390,7 @@ with st.sidebar:
         st.header("AI Configuration")
         available_models = AIDashboardGenerator.get_available_models()
         if not available_models:
-            st.warning("No AI models configured. Please add API keys to your Streamlit secrets.")
+            st.warning("No AI models configured. Add API keys to secrets to enable.")
             model_choice = None
         else:
             model_choice = st.selectbox("Choose AI Model", available_models)
@@ -408,7 +401,7 @@ with st.sidebar:
         st.rerun()
 
     st.markdown("---")
-    st.markdown("<div class='footer'><p>For questions or feedback, please <a href='mailto:your.email@example.com'>contact the Quality Dept</a>.</p></div>", unsafe_allow_html=True)
+    st.markdown("<div class='footer'><p>For questions, contact the <a href='mailto:your.email@example.com'>Quality Dept</a>.</p></div>", unsafe_allow_html=True)
 
 
 # --- MAIN PANEL DISPLAY ---
