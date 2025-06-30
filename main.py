@@ -6,62 +6,67 @@ from streamlit_gsheets import GSheetsConnection
 from datetime import datetime
 
 # --- PAGE CONFIGURATION ---
-# Set the page configuration for a professional look suitable for a large screen
 st.set_page_config(
     page_title="Quality KPI Dashboard",
     page_icon="📊",
     layout="wide",
-    initial_sidebar_state="collapsed"
+    initial_sidebar_state="auto"
 )
 
 # --- CUSTOM STYLING (CSS) ---
-# A more robust way to style is to target Streamlit's data-testid attributes
 st.markdown("""
 <style>
     /* Main app background */
+    .main .block-container {
+        padding-top: 2rem;
+        padding-bottom: 2rem;
+    }
     .main {
         background-color: #0f1116;
     }
     /* Main title */
     h1 {
-        font-size: 3.5rem !important;
+        font-size: 3rem !important;
         font-weight: bold;
         text-align: center;
         color: #FFFFFF;
+        padding-bottom: 1rem;
     }
     /* Subheaders */
     h2, h3 {
         color: #E0E0E0;
-        text-align: center;
+        text-align: left;
     }
     /* Metric cards styling */
     div[data-testid="stMetric"] {
         background-color: #1a1c24;
         border: 1px solid #2c2f3b;
         border-radius: 10px;
-        padding: 25px;
+        padding: 20px;
         box-shadow: 0 4px 12px 0 rgba(0,0,0,0.15);
     }
-    /* Metric label */
     div[data-testid="stMetricLabel"] {
-        font-size: 1.25rem;
+        font-size: 1.1rem;
         color: #a0a4b8;
+        font-weight: 500;
     }
-    /* Metric value */
     div[data-testid="stMetricValue"] {
-        font-size: 3rem;
+        font-size: 2.5rem;
         font-weight: 600;
     }
-    /* Metric delta (positive is bad, so red) */
     div[data-testid="stMetricDelta"] > div[data-testid="stMarkdownContainer"] > p {
         font-size: 1.1rem !important;
         font-weight: 600 !important;
+    }
+    /* Sidebar styling */
+    [data-testid="stSidebar"] {
+        background-color: #1a1c24;
     }
     /* Footer styling */
     .footer {
         text-align: center;
         color: #a0a4b8;
-        font-size: 1rem;
+        font-size: 0.9rem;
         padding-top: 2rem;
     }
     .footer a {
@@ -72,132 +77,159 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 
-# --- DATA LOADING AND CLEANING ---
+# --- DATA LOADING AND TRANSFORMATION ---
 @st.cache_data(ttl=3600) # Cache data for 1 hour
-def load_and_clean_data():
+def load_and_transform_data():
     """
-    Connects to Google Sheets, loads the data, and performs necessary cleaning.
+    Connects to Google Sheets, loads the multi-year/multi-channel data,
+    and transforms it into a clean, long-format DataFrame suitable for analysis.
     """
     try:
         conn = st.connection("gsheets", type=GSheetsConnection)
-        
-        # Use the worksheet's GID (Grid ID) instead of its name for reliability.
-        # This is the number at the end of your Google Sheet URL (gid=799906691)
-        data = conn.read(
-            worksheet=799906691,
-            usecols=[0, 1, 2],
-            header=28
-        )
-        data.dropna(how='all', inplace=True)
-        data.rename(columns={
-            'Company Wide Return Rate %': 'return_rate_by_qty',
-            'Returns % of Revenue': 'return_rate_by_revenue'
-        }, inplace=True)
-        for col in ['return_rate_by_qty', 'return_rate_by_revenue']:
-            data[col] = data[col].astype(str).str.replace('%', '', regex=False).astype(float) / 100.0
-        
-        # Handle year changes correctly
-        def assign_date(month_str):
-            # This logic assumes the sheet is for the current or previous year
-            current_month = datetime.now().month
-            current_year = datetime.now().year
-            month_num = datetime.strptime(month_str, "%b").month
-            year = current_year if month_num <= current_month else current_year -1
-            return datetime(year, month_num, 1)
+        # Read the raw data block without a header
+        raw_data = conn.read(worksheet=799906691, header=None)
 
-        data['Date'] = data['Month'].apply(assign_date)
-        data = data.sort_values(by='Date').reset_index(drop=True)
-        return data
+        # --- Data Transformation Logic ---
+        # 1. Identify the start of the actual data table
+        header_row_index = raw_data[raw_data[1] == '2025'].index[0]
+        months = raw_data.iloc[header_row_index - 1, 2:].dropna().tolist()
+        
+        # 2. Slice the DataFrame to get only the relevant data rows and columns
+        data = raw_data.iloc[header_row_index:, 1:].reset_index(drop=True)
+        data.columns = ['Category'] + months
+        
+        # 3. Forward-fill the year values and create a 'Channel' column
+        data['Year'] = data['Category'].where(data['Category'].astype(str).str.isnumeric()).ffill().astype(int)
+        data['Channel'] = data['Category'].where(~data['Category'].astype(str).str.isnumeric())
+        
+        # 4. Filter to keep only the channel rows and drop unnecessary columns
+        data = data.dropna(subset=['Channel']).drop(columns=['Category'])
+        
+        # 5. "Melt" the DataFrame from wide to long format
+        id_vars = ['Year', 'Channel']
+        value_vars = months
+        long_df = pd.melt(data, id_vars=id_vars, value_vars=value_vars, var_name='Month', value_name='Return Rate')
+        
+        # 6. Clean and convert data types
+        long_df['Return Rate'] = pd.to_numeric(long_df['Return Rate'].astype(str).str.replace('%', ''), errors='coerce') / 100.0
+        long_df.dropna(subset=['Return Rate'], inplace=True)
+        
+        # 7. Create a proper datetime object for plotting and sorting
+        long_df['Date'] = pd.to_datetime(long_df['Year'].astype(str) + '-' + long_df['Month'], format='%Y-%b')
+        
+        return long_df.sort_values(by='Date').reset_index(drop=True)
 
     except Exception as e:
-        st.error(f"An error occurred while loading data: {e}")
-        return pd.DataFrame(columns=['Month', 'Date', 'return_rate_by_qty', 'return_rate_by_revenue'])
+        st.error(f"An error occurred while loading or transforming data: {e}")
+        return pd.DataFrame()
 
-
-# --- UI / DASHBOARD LAYOUT ---
-df = load_and_clean_data()
-
-st.title("📊 Quality Department KPI Dashboard")
-
-if not df.empty:
-    # --- HEADER ---
-    last_update_time = datetime.now().strftime("%B %d, %Y at %I:%M %p")
-    st.markdown(f"### Last Updated: {last_update_time}")
-    st.divider()
-
-    # --- KEY METRICS DISPLAY ---
-    latest_data = df.iloc[-1]
-    
-    # Calculate delta from the previous month
-    delta_qty, delta_rev = None, None
-    if len(df) > 1:
-        previous_data = df.iloc[-2]
-        delta_qty = latest_data['return_rate_by_qty'] - previous_data['return_rate_by_qty']
-        delta_rev = latest_data['return_rate_by_revenue'] - previous_data['return_rate_by_revenue']
-
-    st.subheader(f"Key Metrics for {latest_data['Month']}")
-    
-    col1, col2 = st.columns(2)
-    with col1:
-        st.metric(
-            label="Return Rate (by Quantity)",
-            value=f"{latest_data['return_rate_by_qty']:.2%}",
-            delta=f"{delta_qty:.2%}" if delta_qty is not None else None,
-            delta_color="inverse", # Lower is better
-            help="The percentage of total units shipped that were returned."
-        )
-    with col2:
-        st.metric(
-            label="Return Rate (% of Revenue)",
-            value=f"{latest_data['return_rate_by_revenue']:.2%}",
-            delta=f"{delta_rev:.2%}" if delta_rev is not None else None,
-            delta_color="inverse", # Lower is better
-            help="The value of returned goods as a percentage of total revenue."
-        )
-
-    st.divider()
-
-    # --- DATA VISUALIZATION ---
-    st.subheader("Monthly Performance Trends")
-
-    # Create a line chart using Plotly Express with a dark theme
-    fig_line = px.line(
-        df,
-        x='Date',
-        y=['return_rate_by_qty', 'return_rate_by_revenue'],
-        markers=True,
-        template="plotly_dark",
-        labels={'value': 'Rate', 'Date': 'Month'},
-    )
-    fig_line.update_layout(
-        title_text="Return Rates Over Time",
-        legend_title_text='Metric',
-        yaxis_tickformat='.1%',
+# --- HELPER FUNCTIONS FOR VISUALIZATIONS ---
+def create_sparkline(data_series):
+    """Creates a sparkline chart for a given data series."""
+    fig = go.Figure(go.Scatter(
+        x=list(range(len(data_series))),
+        y=data_series,
+        mode='lines',
+        fill='tozeroy',
+        line=dict(color='#1c83e1', width=2),
+        fillcolor='rgba(28, 131, 225, 0.2)'
+    ))
+    fig.update_layout(
+        width=200, height=80,
+        showlegend=False,
         plot_bgcolor='rgba(0,0,0,0)',
         paper_bgcolor='rgba(0,0,0,0)',
+        margin=dict(l=0, r=0, b=0, t=4),
+        xaxis=dict(visible=False),
+        yaxis=dict(visible=False)
     )
-    fig_line.update_traces(hovertemplate='<b>%{x|%B %Y}</b><br>Rate: %{y:.2%}')
-    new_names = {
-        'return_rate_by_qty': 'By Quantity', 
-        'return_rate_by_revenue': '% of Revenue'
-    }
-    fig_line.for_each_trace(lambda t: t.update(name=new_names[t.name]))
+    return fig
+
+# --- MAIN DASHBOARD ---
+st.title("📊 Quality Department KPI Dashboard")
+
+df = load_and_transform_data()
+
+if not df.empty:
+    # --- SIDEBAR CONTROLS ---
+    with st.sidebar:
+        st.header("Dashboard Controls")
+        
+        # Year selector based on available data
+        available_years = sorted(df['Year'].unique(), reverse=True)
+        selected_year = st.selectbox("Select Year", available_years)
+        
+        if st.button("🔄 Refresh Data"):
+            st.cache_data.clear()
+            st.rerun()
+        
+        st.markdown("---")
+        st.markdown(
+            """
+            <div class="footer">
+                <p>For questions or feedback, please <a href='mailto:alexander.popoff@vivehealth.com'>contact the Quality Dept</a>.</p>
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
+
+    # Filter DataFrame based on selected year
+    df_filtered = df[df['Year'] == selected_year]
+
+    # --- KPI OVERVIEW ---
+    st.subheader(f"Executive Summary: {selected_year} Performance")
     
-    st.plotly_chart(fig_line, use_container_width=True)
+    # Get latest data for each channel in the selected year
+    latest_amazon = df_filtered[df_filtered['Channel'] == 'Amazon'].iloc[-1] if not df_filtered[df_filtered['Channel'] == 'Amazon'].empty else None
+    latest_b2b = df_filtered[df_filtered['Channel'] == 'B2B'].iloc[-1] if not df_filtered[df_filtered['Channel'] == 'B2B'].empty else None
+
+    col1, col2 = st.columns(2)
+    with col1:
+        if latest_amazon is not None:
+            st.metric(
+                label=f"Amazon Return Rate ({latest_amazon['Month']})",
+                value=f"{latest_amazon['Return Rate']:.2%}"
+            )
+            st.plotly_chart(create_sparkline(df_filtered[df_filtered['Channel'] == 'Amazon']['Return Rate']), use_container_width=True)
+        else:
+            st.info("No Amazon data available for the selected year.")
+            
+    with col2:
+        if latest_b2b is not None:
+            st.metric(
+                label=f"B2B Return Rate ({latest_b2b['Month']})",
+                value=f"{latest_b2b['Return Rate']:.2%}"
+            )
+            st.plotly_chart(create_sparkline(df_filtered[df_filtered['Channel'] == 'B2B']['Return Rate']), use_container_width=True)
+        else:
+            st.info("No B2B data available for the selected year.")
+
+    st.markdown("---")
+
+    # --- TREND ANALYSIS ---
+    st.subheader(f"Channel Performance Trends for {selected_year}")
+    
+    fig = px.line(
+        df_filtered,
+        x='Date',
+        y='Return Rate',
+        color='Channel',
+        markers=True,
+        template="plotly_dark",
+        labels={'Return Rate': 'Rate', 'Date': 'Month', 'Channel': 'Sales Channel'},
+        color_discrete_map={'Amazon': '#ff9900', 'B2B': '#1c83e1'}
+    )
+    fig.update_layout(
+        yaxis_tickformat='.2%',
+        plot_bgcolor='rgba(0,0,0,0)',
+        paper_bgcolor='rgba(0,0,0,0)',
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+        hovermode="x unified"
+    )
+    st.plotly_chart(fig, use_container_width=True)
 
     # --- RAW DATA DISPLAY ---
-    with st.expander("View Raw Data Table"):
+    with st.expander("View Transformed Data Table"):
         st.dataframe(df)
-
 else:
     st.warning("Data could not be loaded. Please check the Google Sheet is shared correctly and the format is as expected.")
-
-# --- FOOTER ---
-st.markdown(
-    """
-    <div class="footer">
-        <p>For questions or feedback, please <a href='mailto:alexander.popoff@vivehealth.com'>contact the Quality Department</a>.</p>
-    </div>
-    """,
-    unsafe_allow_html=True
-)
