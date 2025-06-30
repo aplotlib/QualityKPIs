@@ -92,52 +92,61 @@ def load_and_transform_data():
         
         # Robust pre-processing: Fill all NaN/None values with empty strings
         raw_data = raw_data.fillna('')
-        # Convert entire dataframe to string to ensure consistent comparisons
         raw_data = raw_data.astype(str)
 
         all_metrics_data = []
 
-        # Find rows that define the start of a new metric block (value in Column C, empty in D)
-        metric_header_indices = raw_data[raw_data[2].ne('') & raw_data[3].eq('')].index
-
-        if metric_header_indices.empty:
-            st.error("Parsing Error: Could not identify any metric header rows. Please ensure that in your Google Sheet, metric titles (e.g., 'Overall Return Rate') are in Column C, and the corresponding cell in Column D is empty.")
+        # Find all rows that contain "Jan". These are our month headers.
+        month_header_rows = raw_data[raw_data.apply(lambda r: 'Jan' in r.values, axis=1)]
+        
+        if month_header_rows.empty:
+            st.error("Parsing Error: Could not find any month header rows containing 'Jan'.")
             return pd.DataFrame()
 
-        for i, start_row_idx in enumerate(metric_header_indices):
-            metric_name = raw_data.iloc[start_row_idx, 2]
-            
-            # The month header is one row below the metric name row
-            month_header_row_idx = start_row_idx + 1
-            # Months start in Column F (index 5)
-            months = raw_data.iloc[month_header_row_idx, 5:].tolist()
-            
-            # Data for this metric starts one row after the month header
-            data_start_row_idx = month_header_row_idx + 1
-            
-            # Determine the end of the current block
-            next_metric_start_idx = metric_header_indices[i+1] if (i + 1) < len(metric_header_indices) else len(raw_data)
-            
-            current_metric_data = raw_data.iloc[data_start_row_idx:next_metric_start_idx]
+        month_header_indices = month_header_rows.index.tolist()
 
-            # Process each row in the current metric's data block
-            for _, row in current_metric_data.iterrows():
-                # Year is in Column D (index 3)
-                year_val = row[3]
-                # Channel is in Column E (index 4)
-                channel = row[4]
-                
+        for i, header_idx in enumerate(month_header_indices):
+            header_row = raw_data.iloc[header_idx]
+            
+            # Find the column index where the months start
+            month_list = header_row.tolist()
+            try:
+                month_start_col = month_list.index('Jan')
+            except ValueError:
+                continue # Should not happen due to the filter above, but for safety
+
+            months = [m for m in month_list[month_start_col:] if m != '']
+
+            # Data for this metric starts on the row below the month header
+            data_start_idx = header_idx + 1
+            
+            # Find the end of this data block. It ends before the next month header.
+            block_end_idx = month_header_indices[i+1] if (i + 1) < len(month_header_indices) else len(raw_data)
+
+            metric_block_df = raw_data.iloc[data_start_idx:block_end_idx]
+
+            # The metric title is in the first row of the data block, in column C (index 2)
+            if metric_block_df.empty:
+                continue
+            
+            metric_name = metric_block_df.iloc[0, 2]
+
+            # Process each data row in the block
+            for _, data_row in metric_block_df.iterrows():
+                year_val = data_row[3]
+                channel = data_row[4]
+
                 if year_val == '' or channel == '':
                     continue
-
-                # Monthly values start from Column F (index 5)
-                values = row[5:].tolist()
                 
+                # Get the values for the months we found
+                values = data_row[month_start_col:month_start_col + len(months)].tolist()
+
                 for month, value in zip(months, values):
-                    if month != '' and value != '':
+                    if value != '':
                         all_metrics_data.append({
                             'Metric': metric_name,
-                            'Year': int(float(year_val)), # FIX: Convert to float first, then to int
+                            'Year': int(float(year_val)),
                             'Channel': channel,
                             'Month': month,
                             'Value': value
