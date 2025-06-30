@@ -109,21 +109,30 @@ def load_and_transform_data():
         current_months = []
         month_start_col = -1
 
+        # Iterate through each row to parse the sheet contextually
         for index, row_series in raw_data.iterrows():
             row = row_series.tolist()
             
+            # Condition 1: Is this a metric title row? (e.g., "Overall Return Rate")
+            # It has text in Column C and is empty in D and E.
             if row[2] != '' and row[3] == '' and row[4] == '':
                 current_metric = row[2]
                 continue
 
+            # Condition 2: Is this a month header row? (e.g., "Jan", "Feb", ...)
+            # We look for "Jan" to identify the start of the months.
             if 'Jan' in row:
                 try:
                     month_start_col = row.index('Jan')
+                    # Filter out any summary columns like "Total/AVG"
                     current_months = [m for m in row[month_start_col:] if m != '' and 'Total' not in m and 'AVG' not in m]
                 except ValueError:
+                    # This row contains "Jan" but not as a distinct cell value, so ignore.
                     pass
                 continue
 
+            # Condition 3: Is this a data row?
+            # It has a year in Column D and a channel in Column E.
             year_val = row[3]
             channel = row[4]
             if year_val.isnumeric() and channel != '' and current_metric is not None and current_months:
