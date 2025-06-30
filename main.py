@@ -115,7 +115,8 @@ def load_and_transform_data():
             except ValueError:
                 continue # Should not happen due to the filter above, but for safety
 
-            months = [m for m in month_list[month_start_col:] if m != '']
+            # FIX: Filter out any columns that are not valid months (e.g., 'Total/AVG')
+            months = [m for m in month_list[month_start_col:] if m != '' and 'Total' not in m and 'AVG' not in m]
 
             # Data for this metric starts on the row below the month header
             data_start_idx = header_idx + 1
@@ -174,7 +175,6 @@ def load_and_transform_data():
         df['Value'] = df.apply(clean_value, axis=1)
         df.dropna(subset=['Value'], inplace=True)
         
-        # FIX: Remove the strict format to allow pandas to infer it.
         # This handles both "Apr" and "April" automatically.
         df['Date'] = pd.to_datetime(df['Year'].astype(str) + '-' + df['Month'])
         
