@@ -90,8 +90,14 @@ def load_and_transform_data():
         raw_data = conn.read(worksheet=799906691, header=None)
 
         # --- Data Transformation Logic ---
-        # 1. Identify the start of the actual data table
-        header_row_index = raw_data[raw_data[1] == '2025'].index[0]
+        # 1. Dynamically identify the start of the actual data table
+        # This robustly finds the first row where the second column is a 4-digit year.
+        year_rows = raw_data[raw_data[1].astype(str).str.match(r'^\d{4}$')]
+        if year_rows.empty:
+            st.error("Error: Could not find a starting year (e.g., 2025) in the second column of the Google Sheet.")
+            return pd.DataFrame()
+        
+        header_row_index = year_rows.index[0]
         months = raw_data.iloc[header_row_index - 1, 2:].dropna().tolist()
         
         # 2. Slice the DataFrame to get only the relevant data rows and columns
@@ -192,7 +198,7 @@ if not df.empty:
             )
             st.plotly_chart(create_sparkline(df_filtered[df_filtered['Channel'] == 'Amazon']['Return Rate']), use_container_width=True)
         else:
-            st.info("No Amazon data available for the selected year.")
+            st.info(f"No Amazon data available for {selected_year}.")
             
     with col2:
         if latest_b2b is not None:
@@ -202,31 +208,34 @@ if not df.empty:
             )
             st.plotly_chart(create_sparkline(df_filtered[df_filtered['Channel'] == 'B2B']['Return Rate']), use_container_width=True)
         else:
-            st.info("No B2B data available for the selected year.")
+            st.info(f"No B2B data available for {selected_year}.")
 
     st.markdown("---")
 
     # --- TREND ANALYSIS ---
     st.subheader(f"Channel Performance Trends for {selected_year}")
     
-    fig = px.line(
-        df_filtered,
-        x='Date',
-        y='Return Rate',
-        color='Channel',
-        markers=True,
-        template="plotly_dark",
-        labels={'Return Rate': 'Rate', 'Date': 'Month', 'Channel': 'Sales Channel'},
-        color_discrete_map={'Amazon': '#ff9900', 'B2B': '#1c83e1'}
-    )
-    fig.update_layout(
-        yaxis_tickformat='.2%',
-        plot_bgcolor='rgba(0,0,0,0)',
-        paper_bgcolor='rgba(0,0,0,0)',
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-        hovermode="x unified"
-    )
-    st.plotly_chart(fig, use_container_width=True)
+    if not df_filtered.empty:
+        fig = px.line(
+            df_filtered,
+            x='Date',
+            y='Return Rate',
+            color='Channel',
+            markers=True,
+            template="plotly_dark",
+            labels={'Return Rate': 'Rate', 'Date': 'Month', 'Channel': 'Sales Channel'},
+            color_discrete_map={'Amazon': '#ff9900', 'B2B': '#1c83e1'}
+        )
+        fig.update_layout(
+            yaxis_tickformat='.2%',
+            plot_bgcolor='rgba(0,0,0,0)',
+            paper_bgcolor='rgba(0,0,0,0)',
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+            hovermode="x unified"
+        )
+        st.plotly_chart(fig, use_container_width=True)
+    else:
+        st.info(f"No data to display for the selected year: {selected_year}")
 
     # --- RAW DATA DISPLAY ---
     with st.expander("View Transformed Data Table"):
