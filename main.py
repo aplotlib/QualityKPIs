@@ -8,7 +8,7 @@ from datetime import datetime
 # --- PAGE CONFIGURATION ---
 st.set_page_config(
     page_title="Quality KPI Dashboard",
-    page_icon="📊",
+    page_icon="�",
     layout="wide",
     initial_sidebar_state="auto"
 )
@@ -81,76 +81,71 @@ st.markdown("""
 @st.cache_data(ttl=3600) # Cache data for 1 hour
 def load_and_transform_data():
     """
-    Connects to Google Sheets, loads the multi-year/multi-channel data,
+    Connects to Google Sheets, loads the multi-metric/multi-year data,
     and transforms it into a clean, long-format DataFrame suitable for analysis.
     """
     try:
         conn = st.connection("gsheets", type=GSheetsConnection)
-        # Read the raw data block without a header
         raw_data = conn.read(worksheet=799906691, header=None)
 
         # --- Data Transformation Logic ---
-        # 1. Dynamically identify the start of the actual data table
-        # This robustly finds the first row where the third column (index 2) is a 4-digit year.
-        year_rows = raw_data[raw_data[2].astype(str).str.match(r'^\d{4}$')]
-        if year_rows.empty:
-            st.error("Error: Could not find a starting year (e.g., 2025) in the third column of the Google Sheet.")
-            return pd.DataFrame()
+        all_metrics_df = pd.DataFrame()
         
-        header_row_index = year_rows.index[0]
-        # The months start in the 5th column (index 4)
-        months = raw_data.iloc[header_row_index - 1, 4:].dropna().tolist()
+        # Find the rows where a new metric block starts (non-empty in column C)
+        metric_start_indices = raw_data[raw_data[2].notna()].index
+
+        for i in range(len(metric_start_indices)):
+            # Determine the start and end of the current metric block
+            start_index = metric_start_indices[i]
+            end_index = metric_start_indices[i+1] if (i+1) < len(metric_start_indices) else len(raw_data)
+            
+            metric_block = raw_data.iloc[start_index:end_index]
+            metric_name = metric_block.iloc[0, 2]
+            
+            # Find the header row for months within this block
+            month_header_row = metric_block[metric_block[4] == 'Jan'].index[0]
+            months = metric_block.loc[month_header_row, 5:].dropna().tolist()
+            
+            # Get the data part of the block
+            data_start_row = month_header_row + 1
+            data = metric_block.loc[data_start_row:, 3:].reset_index(drop=True)
+            data.columns = ['Year', 'Channel'] + months
+            
+            data['Year'] = data['Year'].ffill().astype(int)
+            data = data.dropna(subset=['Channel'])
+            
+            # Melt the block into a long format
+            long_df = pd.melt(data, id_vars=['Year', 'Channel'], value_vars=months, var_name='Month', value_name='Value')
+            long_df['Metric'] = metric_name
+            
+            all_metrics_df = pd.concat([all_metrics_df, long_df], ignore_index=True)
+
+        # --- Final Cleaning and Calculations ---
+        # Identify percentage vs. numeric metrics
+        pct_metrics = [m for m in all_metrics_df['Metric'].unique() if '%' in m]
         
-        # 2. Slice the DataFrame to get only the relevant data rows and columns (C onwards)
-        data = raw_data.iloc[header_row_index:, 2:].reset_index(drop=True)
-        # The first two columns are Year and Channel, the rest are months
-        data.columns = ['Year', 'Channel'] + months
+        # Convert values to numeric, handling percentages correctly
+        def clean_value(row):
+            val_str = str(row['Value']).replace('%', '').replace('$', '').replace(',', '')
+            val_num = pd.to_numeric(val_str, errors='coerce')
+            if row['Metric'] in pct_metrics:
+                return val_num / 100.0
+            return val_num
+            
+        all_metrics_df['Value'] = all_metrics_df.apply(clean_value, axis=1)
+        all_metrics_df.dropna(subset=['Value'], inplace=True)
         
-        # 3. Forward-fill the year values
-        data['Year'] = data['Year'].ffill().astype(int)
+        all_metrics_df['Date'] = pd.to_datetime(all_metrics_df['Year'].astype(str) + '-' + all_metrics_df['Month'], format='%Y-%b')
         
-        # 4. Filter to keep only the channel rows (where 'Channel' is not NaN)
-        data = data.dropna(subset=['Channel'])
+        all_metrics_df = all_metrics_df.sort_values(by=['Metric', 'Channel', 'Date'])
+        all_metrics_df['MoM Change'] = all_metrics_df.groupby(['Metric', 'Channel'])['Value'].diff()
+        all_metrics_df['YoY Change'] = all_metrics_df.groupby(['Metric', 'Channel', all_metrics_df['Date'].dt.month])['Value'].diff()
         
-        # 5. "Melt" the DataFrame from wide to long format
-        id_vars = ['Year', 'Channel']
-        value_vars = months
-        long_df = pd.melt(data, id_vars=id_vars, value_vars=value_vars, var_name='Month', value_name='Return Rate')
-        
-        # 6. Clean and convert data types
-        long_df['Return Rate'] = pd.to_numeric(long_df['Return Rate'].astype(str).str.replace('%', ''), errors='coerce') / 100.0
-        long_df.dropna(subset=['Return Rate'], inplace=True)
-        
-        # 7. Create a proper datetime object for plotting and sorting
-        long_df['Date'] = pd.to_datetime(long_df['Year'].astype(str) + '-' + long_df['Month'], format='%Y-%b')
-        
-        return long_df.sort_values(by='Date').reset_index(drop=True)
+        return all_metrics_df.sort_values(by='Date').reset_index(drop=True)
 
     except Exception as e:
         st.error(f"An error occurred while loading or transforming data: {e}")
         return pd.DataFrame()
-
-# --- HELPER FUNCTIONS FOR VISUALIZATIONS ---
-def create_sparkline(data_series):
-    """Creates a sparkline chart for a given data series."""
-    fig = go.Figure(go.Scatter(
-        x=list(range(len(data_series))),
-        y=data_series,
-        mode='lines',
-        fill='tozeroy',
-        line=dict(color='#1c83e1', width=2),
-        fillcolor='rgba(28, 131, 225, 0.2)'
-    ))
-    fig.update_layout(
-        width=200, height=80,
-        showlegend=False,
-        plot_bgcolor='rgba(0,0,0,0)',
-        paper_bgcolor='rgba(0,0,0,0)',
-        margin=dict(l=0, r=0, b=0, t=4),
-        xaxis=dict(visible=False),
-        yaxis=dict(visible=False)
-    )
-    return fig
 
 # --- MAIN DASHBOARD ---
 st.title("📊 Quality Department KPI Dashboard")
@@ -162,7 +157,9 @@ if not df.empty:
     with st.sidebar:
         st.header("Dashboard Controls")
         
-        # Year selector based on available data
+        available_metrics = df['Metric'].unique()
+        selected_metric = st.selectbox("Select KPI to Analyze", available_metrics)
+        
         available_years = sorted(df['Year'].unique(), reverse=True)
         selected_year = st.selectbox("Select Year", available_years)
         
@@ -180,66 +177,85 @@ if not df.empty:
             unsafe_allow_html=True
         )
 
-    # Filter DataFrame based on selected year
-    df_filtered = df[df['Year'] == selected_year]
+    # --- FILTER DATA BASED ON SELECTIONS ---
+    df_metric = df[df['Metric'] == selected_metric]
+    df_filtered = df_metric[df_metric['Year'] == selected_year]
+    
+    # Determine if lower values are better (for color-coding deltas)
+    lower_is_better = 'rate' in selected_metric.lower() or 'cost' in selected_metric.lower()
 
     # --- KPI OVERVIEW ---
-    st.subheader(f"Executive Summary: {selected_year} Performance")
+    st.subheader(f"Executive Summary: {selected_metric} ({selected_year})")
     
-    # Get latest data for each channel in the selected year
     latest_amazon = df_filtered[df_filtered['Channel'] == 'Amazon'].iloc[-1] if not df_filtered[df_filtered['Channel'] == 'Amazon'].empty else None
     latest_b2b = df_filtered[df_filtered['Channel'] == 'B2B'].iloc[-1] if not df_filtered[df_filtered['Channel'] == 'B2B'].empty else None
+
+    # Determine value format
+    is_percent = '%' in selected_metric
+    is_currency = 'cost' in selected_metric.lower()
+    value_format = "{:,.2%}" if is_percent else ("${:,.2f}" if is_currency else "{:,.0f}")
 
     col1, col2 = st.columns(2)
     with col1:
         if latest_amazon is not None:
             st.metric(
-                label=f"Amazon Return Rate ({latest_amazon['Month']})",
-                value=f"{latest_amazon['Return Rate']:.2%}"
+                label=f"Amazon ({latest_amazon['Month']})",
+                value=value_format.format(latest_amazon['Value']),
+                delta=f"{latest_amazon['MoM Change']:.2%}" if is_percent and pd.notna(latest_amazon['MoM Change']) else None,
+                delta_color="inverse" if lower_is_better else "normal"
             )
-            st.plotly_chart(create_sparkline(df_filtered[df_filtered['Channel'] == 'Amazon']['Return Rate']), use_container_width=True)
+            yoy_change = latest_amazon['YoY Change']
+            if pd.notna(yoy_change):
+                yoy_color = "green" if (yoy_change < 0 and lower_is_better) or (yoy_change > 0 and not lower_is_better) else "red"
+                st.markdown(f"<p style='color:{yoy_color}; font-size: 1.1rem; font-weight: 600;'>{yoy_change:+.2%} vs. Same Month Last Year</p>", unsafe_allow_html=True)
         else:
-            st.info(f"No Amazon data available for {selected_year}.")
+            st.info(f"No Amazon data for {selected_year}.")
             
     with col2:
         if latest_b2b is not None:
             st.metric(
-                label=f"B2B Return Rate ({latest_b2b['Month']})",
-                value=f"{latest_b2b['Return Rate']:.2%}"
+                label=f"B2B ({latest_b2b['Month']})",
+                value=value_format.format(latest_b2b['Value']),
+                delta=f"{latest_b2b['MoM Change']:.2%}" if is_percent and pd.notna(latest_b2b['MoM Change']) else None,
+                delta_color="inverse" if lower_is_better else "normal"
             )
-            st.plotly_chart(create_sparkline(df_filtered[df_filtered['Channel'] == 'B2B']['Return Rate']), use_container_width=True)
+            yoy_change = latest_b2b['YoY Change']
+            if pd.notna(yoy_change):
+                yoy_color = "green" if (yoy_change < 0 and lower_is_better) or (yoy_change > 0 and not lower_is_better) else "red"
+                st.markdown(f"<p style='color:{yoy_color}; font-size: 1.1rem; font-weight: 600;'>{yoy_change:+.2%} vs. Same Month Last Year</p>", unsafe_allow_html=True)
         else:
-            st.info(f"No B2B data available for {selected_year}.")
-
-    st.markdown("---")
+            st.info(f"No B2B data for {selected_year}.")
 
     # --- TREND ANALYSIS ---
-    st.subheader(f"Channel Performance Trends for {selected_year}")
+    st.subheader(f"Performance Trends: {selected_year} vs. {selected_year - 1}")
     
     if not df_filtered.empty:
-        fig = px.line(
-            df_filtered,
-            x='Date',
-            y='Return Rate',
-            color='Channel',
-            markers=True,
-            template="plotly_dark",
-            labels={'Return Rate': 'Rate', 'Date': 'Month', 'Channel': 'Sales Channel'},
-            color_discrete_map={'Amazon': '#ff9900', 'B2B': '#1c83e1'}
-        )
+        df_previous_year = df_metric[df_metric['Year'] == selected_year - 1]
+        fig = go.Figure()
+
+        for channel, color in [('Amazon', '#ff9900'), ('B2B', '#1c83e1')]:
+            # Current year data
+            channel_df = df_filtered[df_filtered['Channel'] == channel]
+            if not channel_df.empty:
+                fig.add_trace(go.Scatter(x=channel_df['Date'].dt.month, y=channel_df['Value'], name=f'{channel} ({selected_year})', mode='lines+markers', line=dict(color=color, width=3)))
+            # Previous year data
+            channel_df_prev = df_previous_year[df_previous_year['Channel'] == channel]
+            if not channel_df_prev.empty:
+                fig.add_trace(go.Scatter(x=channel_df_prev['Date'].dt.month, y=channel_df_prev['Value'], name=f'{channel} ({selected_year - 1})', mode='lines', line=dict(color=color, width=2, dash='dash')))
+
         fig.update_layout(
-            yaxis_tickformat='.2%',
-            plot_bgcolor='rgba(0,0,0,0)',
-            paper_bgcolor='rgba(0,0,0,0)',
+            title_text=f"{selected_metric} Trend",
+            template="plotly_dark",
+            yaxis_tickformat= ('.2%' if is_percent else (None if is_currency else ',.0f')),
+            yaxis_title=selected_metric,
+            plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)',
             legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-            hovermode="x unified"
+            hovermode="x unified",
+            xaxis=dict(tickmode='array', tickvals=list(range(1, 13)), ticktext=['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'])
         )
         st.plotly_chart(fig, use_container_width=True)
     else:
-        st.info(f"No data to display for the selected year: {selected_year}")
+        st.info(f"No data to display for {selected_metric} in {selected_year}")
 
-    # --- RAW DATA DISPLAY ---
-    with st.expander("View Transformed Data Table"):
-        st.dataframe(df)
 else:
     st.warning("Data could not be loaded. Please check the Google Sheet is shared correctly and the format is as expected.")
