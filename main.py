@@ -108,6 +108,7 @@ def load_and_transform_data():
         current_metric = None
         current_months = []
         month_start_col = -1
+        current_year = None
 
         # Iterate through each row to parse the sheet contextually
         for index, row_series in raw_data.iterrows():
@@ -134,16 +135,19 @@ def load_and_transform_data():
             # Condition 3: Is this a data row?
             # It has a year in Column D.
             year_val = row[3]
-            if year_val.isnumeric() and current_metric is not None and current_months:
-                channel = row[4] if row[4] != '' else 'Overall' # Default channel if empty
-                
+            if year_val.isnumeric():
+                current_year = int(float(year_val)) # Update the current year
+            
+            channel = row[4]
+            # A row is a data row if we have a year, a channel, and are inside a metric block
+            if current_year is not None and channel != '' and current_metric is not None and current_months:
                 values = row[month_start_col : month_start_col + len(current_months)]
                 
                 for month, value in zip(current_months, values):
                     if value != '':
                         all_metrics_data.append({
                             'Metric': current_metric,
-                            'Year': int(float(year_val)),
+                            'Year': current_year,
                             'Channel': channel,
                             'Month': month,
                             'Value': value
