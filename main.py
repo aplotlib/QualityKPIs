@@ -129,7 +129,10 @@ def load_and_transform_data():
             if metric_block_df.empty:
                 continue
             
-            metric_name = metric_block_df.iloc[0, 2]
+            # Find the first non-empty value in column C to get the metric name
+            metric_name_series = metric_block_df[2][metric_block_df[2] != '']
+            metric_name = metric_name_series.iloc[0] if not metric_name_series.empty else "Unknown Metric"
+
 
             # Process each data row in the block
             for _, data_row in metric_block_df.iterrows():
@@ -171,7 +174,9 @@ def load_and_transform_data():
         df['Value'] = df.apply(clean_value, axis=1)
         df.dropna(subset=['Value'], inplace=True)
         
-        df['Date'] = pd.to_datetime(df['Year'].astype(str) + '-' + df['Month'], format='%Y-%b')
+        # FIX: Remove the strict format to allow pandas to infer it.
+        # This handles both "Apr" and "April" automatically.
+        df['Date'] = pd.to_datetime(df['Year'].astype(str) + '-' + df['Month'])
         
         df = df.sort_values(by=['Metric', 'Channel', 'Date'])
         df['MoM Change'] = df.groupby(['Metric', 'Channel'])['Value'].diff()
