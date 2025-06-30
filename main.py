@@ -98,7 +98,7 @@ st.markdown("""
 def load_and_transform_data():
     """
     Connects to Google Sheets and robustly transforms the multi-table data
-    into a single, clean DataFrame for analysis.
+    into a single, clean DataFrame for analysis by reading the sheet contextually.
     """
     try:
         conn = st.connection("gsheets", type=GSheetsConnection)
@@ -117,25 +117,26 @@ def load_and_transform_data():
             # It has text in Column C and is empty in D and E.
             if row[2] != '' and row[3] == '' and row[4] == '':
                 current_metric = row[2]
+                current_months = [] # Reset months for new metric
                 continue
 
             # Condition 2: Is this a month header row? (e.g., "Jan", "Feb", ...)
-            # We look for "Jan" to identify the start of the months.
-            if 'Jan' in row:
+            # We look for "Jan" in Column F (index 5) to be specific.
+            if row[5] == 'Jan':
                 try:
-                    month_start_col = row.index('Jan')
+                    month_start_col = 5
                     # Filter out any summary columns like "Total/AVG"
                     current_months = [m for m in row[month_start_col:] if m != '' and 'Total' not in m and 'AVG' not in m]
-                except ValueError:
-                    # This row contains "Jan" but not as a distinct cell value, so ignore.
+                except (ValueError, IndexError):
                     pass
                 continue
 
             # Condition 3: Is this a data row?
-            # It has a year in Column D and a channel in Column E.
+            # It has a year in Column D.
             year_val = row[3]
-            channel = row[4]
-            if year_val.isnumeric() and channel != '' and current_metric is not None and current_months:
+            if year_val.isnumeric() and current_metric is not None and current_months:
+                channel = row[4] if row[4] != '' else 'Overall' # Default channel if empty
+                
                 values = row[month_start_col : month_start_col + len(current_months)]
                 
                 for month, value in zip(current_months, values):
@@ -149,11 +150,12 @@ def load_and_transform_data():
                         })
 
         if not all_metrics_data:
-            st.error("Could not parse any data from the sheet.")
+            st.error("Could not parse any data from the sheet. Please verify the sheet structure matches the expected format (Metric Title in C, Year in D, Channel in E, Months starting in F).")
             return pd.DataFrame()
 
         df = pd.DataFrame(all_metrics_data)
 
+        # --- Final Cleaning and Calculations ---
         pct_metrics = [m for m in df['Metric'].unique() if '%' in m]
         
         def clean_value(row):
@@ -209,8 +211,8 @@ class AIDashboardGenerator:
 
         Available component types and their required params:
         1. "title": {{ "text": "Your Title" }}
-        2. "kpi_summary": {{ "metric": "Metric Name", "year": "Year" }} - This will create a 2-column summary for Amazon and B2B.
-        3. "line_chart": {{ "title": "Chart Title", "metric": "Metric Name", "compare_years": true }}
+        2. "kpi_summary": {{ "metric": "Metric Name", "year": "Year" }}
+        3. "line_chart": {{ "title": "Chart Title", "metric": "Metric Name", "year": "Year" }}
 
         Here is the summary of the available data:
         {data_summary}
@@ -259,98 +261,4 @@ def render_kpi_summary(df, metric, year):
     df_metric = df[df['Metric'] == metric]
     df_filtered = df_metric[df_metric['Year'] == year]
     
-    st.subheader(f"Executive Summary: {metric} ({year})")
-    
-    latest_amazon = df_filtered[df_filtered['Channel'] == 'Amazon'].iloc[-1] if not df_filtered[df_filtered['Channel'] == 'Amazon'].empty else None
-    latest_b2b = df_filtered[df_filtered['Channel'] == 'B2B'].iloc[-1] if not df_filtered[df_filtered['Channel'] == 'B2B'].empty else None
-
-    is_percent = '%' in metric
-    is_currency = 'cost' in metric.lower()
-    value_format = "{:,.2%}" if is_percent else ("${:,.2f}" if is_currency else "{:,.0f}")
-    lower_is_better = 'rate' in metric.lower() or 'cost' in metric.lower()
-
-    col1, col2 = st.columns(2)
-    with col1:
-        if latest_amazon is not None:
-            st.metric(label=f"Amazon ({latest_amazon['Month']})", value=value_format.format(latest_amazon['Value']))
-            yoy_change = latest_amazon['YoY Change']
-            if pd.notna(yoy_change):
-                yoy_color = "green" if (yoy_change < 0 and lower_is_better) or (yoy_change > 0 and not lower_is_better) else "red"
-                st.markdown(f"<p style='color:{yoy_color};'>{yoy_change:+.2%} vs. Last Year</p>", unsafe_allow_html=True)
-    with col2:
-        if latest_b2b is not None:
-            st.metric(label=f"B2B ({latest_b2b['Month']})", value=value_format.format(latest_b2b['Value']))
-            yoy_change = latest_b2b['YoY Change']
-            if pd.notna(yoy_change):
-                yoy_color = "green" if (yoy_change < 0 and lower_is_better) or (yoy_change > 0 and not lower_is_better) else "red"
-                st.markdown(f"<p style='color:{yoy_color};'>{yoy_change:+.2%} vs. Last Year</p>", unsafe_allow_html=True)
-
-def render_line_chart(df, title, metric, year):
-    df_metric = df[df['Metric'] == metric]
-    df_current_year = df_metric[df_metric['Year'] == year]
-    df_previous_year = df_metric[df_metric['Year'] == year - 1]
-    
-    st.subheader(title)
-    fig = go.Figure()
-
-    for channel, color in [('Amazon', '#ff9900'), ('B2B', '#1c83e1')]:
-        # Current year
-        df_ch = df_current_year[df_current_year['Channel'] == channel]
-        if not df_ch.empty:
-            fig.add_trace(go.Scatter(x=df_ch['Date'].dt.month, y=df_ch['Value'], name=f'{channel} ({year})', mode='lines+markers', line=dict(color=color, width=3)))
-        # Previous year
-        df_ch_prev = df_previous_year[df_previous_year['Channel'] == channel]
-        if not df_ch_prev.empty:
-            fig.add_trace(go.Scatter(x=df_ch_prev['Date'].dt.month, y=df_ch_prev['Value'], name=f'{channel} ({year - 1})', mode='lines', line=dict(color=color, width=2, dash='dash')))
-
-    is_percent = '%' in metric
-    is_currency = 'cost' in metric.lower()
-    
-    fig.update_layout(template="plotly_dark", yaxis_tickformat=('.1%' if is_percent else ('$,.0f' if is_currency else ',.0f')), plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)', legend=dict(orientation="h", y=1.15, x=0.5, xanchor="center"), xaxis=dict(tickmode='array', tickvals=list(range(1, 13)), ticktext=['J', 'F', 'M', 'A', 'M', 'J', 'J', 'A', 'S', 'O', 'N', 'D']))
-    st.plotly_chart(fig, use_container_width=True)
-
-# --- MAIN APP LOGIC ---
-st.title("📊 Quality Department KPI Dashboard")
-
-df = load_and_transform_data()
-
-if not df.empty:
-    with st.sidebar:
-        st.header("Dashboard Mode")
-        dashboard_mode = st.radio("Choose Dashboard Type", ["Curated Dashboard", "AI-Generated Dashboard"], label_visibility="collapsed")
-        st.markdown("---")
-
-        st.header("Controls")
-        available_metrics = sorted(df['Metric'].unique())
-        selected_metric = st.selectbox("Select KPI", available_metrics)
-        available_years = sorted(df['Year'].unique(), reverse=True)
-        selected_year = st.selectbox("Select Year", available_years)
-        
-        st.markdown("---")
-        st.header("AI Configuration")
-        available_models = AIAnalyst.get_available_models()
-        model_choice = st.selectbox("Choose AI Model", available_models) if available_models else None
-        
-        if st.button("🔄 Refresh Data"):
-            st.cache_data.clear()
-            st.rerun()
-        
-        st.markdown("---")
-        st.markdown("<div class='footer'><p>For questions or feedback, please <a href='mailto:alexander.popoff@vivehealth.com'>contact the Quality Dept</a>.</p></div>", unsafe_allow_html=True)
-
-    if dashboard_mode == "Curated Dashboard":
-        render_kpi_summary(df, selected_metric, selected_year)
-        st.markdown("---")
-        render_line_chart(df, f"Performance Trends: {selected_year} vs. {selected_year - 1}", selected_metric, selected_year)
-    
-    elif dashboard_mode == "AI-Generated Dashboard":
-        if not model_choice:
-            st.warning("Please select an AI model in the sidebar to generate a dashboard.")
-        else:
-            with st.spinner(f"🤖 Asking {model_choice} to design the dashboard..."):
-                data_summary = f"Available Metrics: {df['Metric'].unique().tolist()}. Available Years: {df['Year'].unique().tolist()}."
-                ai_layout = AIDashboardGenerator.get_ai_layout(data_summary, model_choice)
-                AIDashboardGenerator.render_dashboard(ai_layout, df)
-
-else:
-    st.warning("Data could not be loaded. Please check the Google Sheet is shared correctly and the format is as expected.")
+    st.subheade
