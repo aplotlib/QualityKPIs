@@ -76,11 +76,11 @@ def load_and_transform_data() -> pd.DataFrame:
             if df_month.empty: continue
             
             # Use .get(0) to gracefully handle cases where a metric might be missing for a month
-            total_orders = df_month[df_month['Metric'] == 'Total Orders']['Value'].get(0)
-            orders_inspected = df_month[df_month['Metric'] == 'Orders inspected']['Value'].get(0)
-            reworks = df_month[df_month['Metric'] == '# Reworks']['Value'].get(0)
-            cost_inspection = df_month[df_month['Metric'] == 'Total cost of inspection ($)']['Value'].get(0)
-            returns = df_month[df_month['Metric'] == 'Returns (w/in 3 days)']['Value'].get(0)
+            total_orders = df_month.loc[df_month['Metric'] == 'Total Orders', 'Value'].values[0] if not df_month[df_month['Metric'] == 'Total Orders'].empty else None
+            orders_inspected = df_month.loc[df_month['Metric'] == 'Orders inspected', 'Value'].values[0] if not df_month[df_month['Metric'] == 'Orders inspected'].empty else None
+            reworks = df_month.loc[df_month['Metric'] == '# Reworks', 'Value'].values[0] if not df_month[df_month['Metric'] == '# Reworks'].empty else None
+            cost_inspection = df_month.loc[df_month['Metric'] == 'Total cost of inspection ($)', 'Value'].values[0] if not df_month[df_month['Metric'] == 'Total cost of inspection ($)'].empty else None
+            returns = df_month.loc[df_month['Metric'] == 'Returns (w/in 3 days)', 'Value'].values[0] if not df_month[df_month['Metric'] == 'Returns (w/in 3 days)'].empty else None
             
             if all(v is not None for v in [total_orders, orders_inspected, reworks, cost_inspection, returns]):
                 derived_values = {
@@ -209,22 +209,23 @@ with st.sidebar:
     
     st.markdown("---")
     st.header("AI Analysis")
-    api_key = st.secrets.get("OPENAI_API_KEY")
+    # --- FIX: Check for both uppercase and lowercase versions of the API key ---
+    api_key = st.secrets.get("OPENAI_API_KEY") or st.secrets.get("openai_api_key")
     
     if st.button("🤖 Generate AI Insights", disabled=not api_key, use_container_width=True):
         summary = AIAnalyzer.get_data_summary(df, selected_metric, selected_year)
         with st.spinner("Analyzing data..."): st.session_state.ai_insights = AIAnalyzer.generate_insights(summary, selected_metric, api_key)
         st.session_state.insights_for_metric = selected_metric
     
-    # --- NEW: Secrets & AI Status Debugger ---
+    # --- Secrets & AI Status Debugger ---
     with st.expander("Secrets & AI Status Debugger"):
         st.write("Use this to verify your Streamlit secrets setup.")
-        if st.secrets.get("OPENAI_API_KEY"):
-            st.success("`OPENAI_API_KEY` found!")
+        if api_key:
+            st.success("OpenAI API Key Found!")
             st.info("The AI Insights button above is enabled.")
         else:
-            st.error("`OPENAI_API_KEY` not found.")
-            st.info("The AI Insights button above is disabled. To fix this, add the key to your Streamlit secrets file or configuration.")
+            st.error("OpenAI API Key Not Found.")
+            st.info("The app looked for `OPENAI_API_KEY` or `openai_api_key` but found neither. Please add one to your secrets to enable AI.")
         
         st.write("All available secret keys found by the app:")
         st.json([key for key in st.secrets.keys()])
