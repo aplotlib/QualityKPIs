@@ -82,6 +82,7 @@ def load_and_transform_data() -> pd.DataFrame:
 
         # --- EXPANDED EMBEDDED SAMPLE DATA ---
         sample_raw_data = [
+            # KPI 1: Overall Return Rate (%) - Lower is better
             ['', '', 'Overall Return Rate (%)', '', '', '', '', '', '', '', '', ''],
             ['', '', '', '', '', 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'],
             ['', '', '', '2025', 'Amazon', '4.5%', '4.6%', '4.4%', '4.5%', '4.7%', '4.6%'],
@@ -90,7 +91,11 @@ def load_and_transform_data() -> pd.DataFrame:
             ['', '', '', '2024', 'Amazon', '5.1%', '5.3%', '5.0%', '4.8%', '4.9%', '5.2%', '5.1%', '4.9%', '5.0%', '5.2%', '5.4%', '5.3%'],
             ['', '', '', '2024', 'Walmart', '6.2%', '6.0%', '6.1%', '5.9%', '5.8%', '6.3%', '6.2%', '6.1%', '6.0%', '6.2%', '6.4%', '6.3%'],
             ['', '', '', '2024', 'Overall', '5.5%', '5.6%', '5.4%', '5.2%', '5.3%', '5.7%', '5.6%', '5.4%', '5.4%', '5.6%', '5.8%', '5.7%'],
+            ['', '', '', '2023', 'Amazon', '4.8%', '4.9%', '4.7%', '4.6%', '4.7%', '4.8%', '4.9%', '5.0%', '5.1%', '5.2%', '5.3%', '5.4%'],
+            ['', '', '', '2023', 'Walmart', '5.9%', '5.8%', '5.7%', '5.6%', '5.5%', '5.6%', '5.7%', '5.8%', '5.9%', '6.0%', '6.1%', '6.2%'],
+            ['', '', '', '2023', 'Overall', '5.2%', '5.3%', '5.1%', '5.0%', '5.1%', '5.2%', '5.3%', '5.4%', '5.5%', '5.6%', '5.7%', '5.8%'],
             ['', '', '', '', '', '', '', '', '', '', '', ''],
+            # KPI 2: Customer Satisfaction (CSAT) - Higher is better
             ['', '', 'Customer Satisfaction (CSAT)', '', '', '', '', '', '', '', '', ''],
             ['', '', '', '', '', 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'],
             ['', '', '', '2025', 'Phone Support', '4.3', '4.4', '4.2', '4.5', '4.4', '4.5'],
@@ -100,6 +105,7 @@ def load_and_transform_data() -> pd.DataFrame:
             ['', '', '', '2024', 'Email Support', '4.5', '4.6', '4.5', '4.4', '4.5', '4.6', '4.7', '4.6', '4.5', '4.6', '4.7', '4.8'],
             ['', '', '', '2024', 'Overall', '4.3', '4.4', '4.2', '4.3', '4.4', '4.3', '4.4', '4.4', '4.4', '4.4', '4.5', '4.6'],
             ['', '', '', '', '', '', '', '', '', '', '', ''],
+            # KPI 3: First Contact Resolution (%) - Higher is better
             ['', '', 'First Contact Resolution (%)', '', '', '', '', '', '', '', '', ''],
             ['', '', '', '', '', 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'],
             ['', '', '', '2025', 'Phone Support', '78%', '79%', '77%', '80%', '81%', '80%'],
@@ -109,6 +115,7 @@ def load_and_transform_data() -> pd.DataFrame:
             ['', '', '', '2024', 'Email Support', '85%', '86%', '86%', '87%', '88%', '87%', '88%', '89%', '90%', '89%', '88%', '89%'],
             ['', '', '', '2024', 'Overall', '79%', '80%', '79%', '80%', '81%', '81%', '81%', '82%', '83%', '82%', '81%', '82%'],
             ['', '', '', '', '', '', '', '', '', '', '', ''],
+            # KPI 4: Average Handling Time (sec) - Lower is better
             ['', '', 'Average Handling Time (sec)', '', '', '', '', '', '', '', '', ''],
             ['', '', '', '', '', 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'],
             ['', '', '', '2025', 'Phone Support', '295', '298', '290', '285', '288', '292'],
@@ -176,11 +183,11 @@ class AIDashboardGenerator:
         client, model_name = None, ""
         try:
             if "Claude" in model_choice:
-                if not ANTHROPIC_AVAILABLE: return {"error": "Anthropic library not installed."}
+                if not ANTHROPIC_AVAILABLE: return {"error": "Anthropic library not installed. Please add it to your requirements.txt."}
                 client = anthropic.Anthropic(api_key=api_key)
                 model_name = "claude-3-5-sonnet-20240620"
             elif "GPT" in model_choice:
-                if not OPENAI_AVAILABLE: return {"error": "OpenAI library not installed."}
+                if not OPENAI_AVAILABLE: return {"error": "OpenAI library not installed. Please add it to your requirements.txt."}
                 client = openai.OpenAI(api_key=api_key)
                 model_name = "gpt-4o"
             else:
@@ -295,26 +302,16 @@ with st.sidebar:
         st.header("AI Configuration")
         model_choice = st.radio("Choose AI Model", ["GPT-4o", "Claude 3.5 Sonnet"], horizontal=True)
         
-        # Determine the key for secrets (case-insensitive)
+        # Define the expected secret key name based on the model choice
         secret_key_map = {"GPT-4o": "OPENAI_API_KEY", "Claude 3.5 Sonnet": "ANTHROPIC_API_KEY"}
         secret_key_name = secret_key_map[model_choice]
 
-        # Allow user to input API key directly, overriding secrets
-        user_api_key = st.text_input(
-            label=f"Enter {model_choice} API Key",
-            type="password",
-            help=f"Your key is not stored. It overrides the secret key '{secret_key_name}' if provided."
-        )
-        
-        api_key_to_use = None
-        if user_api_key:
-            api_key_to_use = user_api_key
-            st.success("✅ Using API key provided above.")
-        elif st.secrets.get(secret_key_name):
-            api_key_to_use = st.secrets[secret_key_name]
-            st.info(f"ℹ️ Using API key found in Streamlit secrets ('{secret_key_name}').")
+        # Check for the key in Streamlit's secrets and provide clear feedback
+        api_key_to_use = st.secrets.get(secret_key_name)
+        if api_key_to_use:
+            st.success(f"✅ API key for {model_choice} found in secrets.")
         else:
-            st.warning(f"⚠️ Please provide an API key above or set '{secret_key_name}' in your Streamlit secrets.")
+            st.warning(f"⚠️ To use this model, please set `{secret_key_name}` in your Streamlit secrets.")
 
     st.markdown("---")
     if st.button("🔄 Refresh Data"):
@@ -330,10 +327,11 @@ if dashboard_mode == "Curated":
 
 elif dashboard_mode == "AI-Generated":
     st.header("AI-Generated Dashboard")
+    # Only proceed if the API key was successfully found in secrets
     if api_key_to_use:
         with st.spinner(f"🤖 Asking {model_choice} to design the dashboard..."):
             data_summary = f"Metrics: {df['Metric'].unique().tolist()}. Years: {df['Year'].unique().tolist()}."
             ai_layout = AIDashboardGenerator.get_ai_layout(data_summary, model_choice, api_key=api_key_to_use)
             AIDashboardGenerator.render_dashboard(ai_layout, df)
     else:
-        st.info("Please configure an API key in the sidebar to generate an AI dashboard.")
+        st.info("Please configure the required API key in your Streamlit secrets to generate an AI dashboard.")
