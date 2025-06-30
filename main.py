@@ -9,17 +9,12 @@ from datetime import datetime
 # Set the page configuration for a professional look suitable for a large screen
 st.set_page_config(
     page_title="Quality KPI Dashboard",
-    page_icon="📊",
+    page_icon="�",
     layout="wide",
     initial_sidebar_state="collapsed"
 )
 
 # --- CUSTOM STYLING (CSS) ---
-# Inject custom CSS for a dark theme, larger fonts, and styled metric cards
-def local_css(file_name):
-    with open(file_name) as f:
-        st.markdown(f"<style>{f.read()}</style>", unsafe_allow_html=True)
-
 # A more robust way to style is to target Streamlit's data-testid attributes
 st.markdown("""
 <style>
