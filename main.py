@@ -90,61 +90,49 @@ def load_and_transform_data():
         conn = st.connection("gsheets", type=GSheetsConnection)
         raw_data = conn.read(worksheet=799906691, header=None)
         
-        # Robust pre-processing: Fill all NaN/None values with empty strings
-        raw_data = raw_data.fillna('')
-        raw_data = raw_data.astype(str)
+        raw_data = raw_data.fillna('').astype(str)
 
         all_metrics_data = []
 
-        # Find all rows that contain "Jan". These are our month headers.
-        month_header_rows = raw_data[raw_data.apply(lambda r: 'Jan' in r.values, axis=1)]
-        
-        if month_header_rows.empty:
-            st.error("Parsing Error: Could not find any month header rows containing 'Jan'.")
+        # Find rows that define the start of a new metric block (value in Column C, empty in D & E)
+        metric_title_indices = raw_data[
+            raw_data[2].ne('') & 
+            raw_data[3].eq('') & 
+            raw_data[4].eq('')
+        ].index
+
+        if metric_title_indices.empty:
+            st.error("Parsing Error: Could not identify any metric title rows. A title row should have text in Column C and be empty in Columns D and E.")
             return pd.DataFrame()
 
-        month_header_indices = month_header_rows.index.tolist()
-
-        for i, header_idx in enumerate(month_header_indices):
-            header_row = raw_data.iloc[header_idx]
+        for i, title_idx in enumerate(metric_title_indices):
+            metric_name = raw_data.iloc[title_idx, 2]
             
-            # Find the column index where the months start
-            month_list = header_row.tolist()
-            try:
-                month_start_col = month_list.index('Jan')
-            except ValueError:
-                continue # Should not happen due to the filter above, but for safety
+            # Define the search area for this metric's data
+            start_search_idx = title_idx + 1
+            end_search_idx = metric_title_indices[i+1] if (i + 1) < len(metric_title_indices) else len(raw_data)
+            metric_block = raw_data.iloc[start_search_idx:end_search_idx]
 
-            # FIX: Filter out any columns that are not valid months (e.g., 'Total/AVG')
-            months = [m for m in month_list[month_start_col:] if m != '' and 'Total' not in m and 'AVG' not in m]
-
-            # Data for this metric starts on the row below the month header
-            data_start_idx = header_idx + 1
+            # Find the month header row within this block (look for 'Jan' in Column F)
+            month_header_row = metric_block[metric_block[5] == 'Jan']
+            if month_header_row.empty:
+                continue 
             
-            # Find the end of this data block. It ends before the next month header.
-            block_end_idx = month_header_indices[i+1] if (i + 1) < len(month_header_indices) else len(raw_data)
-
-            metric_block_df = raw_data.iloc[data_start_idx:block_end_idx]
-
-            # The metric title is in the first row of the data block, in column C (index 2)
-            if metric_block_df.empty:
-                continue
+            month_header_idx = month_header_row.index[0]
+            months_list = raw_data.iloc[month_header_idx, 5:].tolist()
+            months = [m for m in months_list if m != '' and 'Total' not in m and 'AVG' not in m]
             
-            # Find the first non-empty value in column C to get the metric name
-            metric_name_series = metric_block_df[2][metric_block_df[2] != '']
-            metric_name = metric_name_series.iloc[0] if not metric_name_series.empty else "Unknown Metric"
+            # Data rows are below the month header
+            data_df = metric_block.loc[month_header_idx + 1:]
 
-
-            # Process each data row in the block
-            for _, data_row in metric_block_df.iterrows():
-                year_val = data_row[3]
-                channel = data_row[4]
+            for _, data_row in data_df.iterrows():
+                year_val = data_row[3]  # Column D
+                channel = data_row[4]   # Column E
 
                 if year_val == '' or channel == '':
                     continue
                 
-                # Get the values for the months we found
-                values = data_row[month_start_col:month_start_col + len(months)].tolist()
+                values = data_row[5:5 + len(months)].tolist()
 
                 for month, value in zip(months, values):
                     if value != '':
@@ -157,7 +145,7 @@ def load_and_transform_data():
                         })
 
         if not all_metrics_data:
-            st.error("Could not parse any data from the sheet. Please verify the sheet structure.")
+            st.error("Could not parse any data. Please verify the sheet structure below the metric titles.")
             return pd.DataFrame()
 
         df = pd.DataFrame(all_metrics_data)
@@ -175,7 +163,6 @@ def load_and_transform_data():
         df['Value'] = df.apply(clean_value, axis=1)
         df.dropna(subset=['Value'], inplace=True)
         
-        # This handles both "Apr" and "April" automatically.
         df['Date'] = pd.to_datetime(df['Year'].astype(str) + '-' + df['Month'])
         
         df = df.sort_values(by=['Metric', 'Channel', 'Date'])
