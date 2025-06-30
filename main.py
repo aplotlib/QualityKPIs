@@ -4,11 +4,12 @@ import plotly.express as px
 import plotly.graph_objects as go
 from streamlit_gsheets import GSheetsConnection
 from datetime import datetime
+import traceback
 
 # --- PAGE CONFIGURATION ---
 st.set_page_config(
     page_title="Quality KPI Dashboard",
-    page_icon="�",
+    page_icon="📊",
     layout="wide",
     initial_sidebar_state="auto"
 )
@@ -83,48 +84,74 @@ def load_and_transform_data():
     """
     Connects to Google Sheets, loads the multi-metric/multi-year data,
     and transforms it into a clean, long-format DataFrame suitable for analysis.
+    This version is robustly designed to parse the specific sheet structure.
     """
     try:
         conn = st.connection("gsheets", type=GSheetsConnection)
         raw_data = conn.read(worksheet=799906691, header=None)
-
-        # --- Data Transformation Logic ---
-        all_metrics_df = pd.DataFrame()
         
-        # Find the rows where a new metric block starts (non-empty in column C)
-        metric_start_indices = raw_data[raw_data[2].notna()].index
+        # Robust pre-processing: Fill all NaN/None values with empty strings
+        raw_data = raw_data.fillna('')
+        # Convert entire dataframe to string to ensure consistent comparisons
+        raw_data = raw_data.astype(str)
 
-        for i in range(len(metric_start_indices)):
-            # Determine the start and end of the current metric block
-            start_index = metric_start_indices[i]
-            end_index = metric_start_indices[i+1] if (i+1) < len(metric_start_indices) else len(raw_data)
+        all_metrics_data = []
+
+        # Find rows that define the start of a new metric block (value in Column C, empty in D)
+        metric_header_indices = raw_data[raw_data[2].ne('') & raw_data[3].eq('')].index
+
+        if metric_header_indices.empty:
+            st.error("Parsing Error: Could not identify any metric header rows. Please ensure that in your Google Sheet, metric titles (e.g., 'Overall Return Rate') are in Column C, and the corresponding cell in Column D is empty.")
+            return pd.DataFrame()
+
+        for i, start_row_idx in enumerate(metric_header_indices):
+            metric_name = raw_data.iloc[start_row_idx, 2]
             
-            metric_block = raw_data.iloc[start_index:end_index]
-            metric_name = metric_block.iloc[0, 2]
+            # The month header is one row below the metric name row
+            month_header_row_idx = start_row_idx + 1
+            # Months start in Column F (index 5)
+            months = raw_data.iloc[month_header_row_idx, 5:].tolist()
             
-            # Find the header row for months within this block
-            month_header_row = metric_block[metric_block[4] == 'Jan'].index[0]
-            months = metric_block.loc[month_header_row, 5:].dropna().tolist()
+            # Data for this metric starts one row after the month header
+            data_start_row_idx = month_header_row_idx + 1
             
-            # Get the data part of the block
-            data_start_row = month_header_row + 1
-            data = metric_block.loc[data_start_row:, 3:].reset_index(drop=True)
-            data.columns = ['Year', 'Channel'] + months
+            # Determine the end of the current block
+            next_metric_start_idx = metric_header_indices[i+1] if (i + 1) < len(metric_header_indices) else len(raw_data)
             
-            data['Year'] = data['Year'].ffill().astype(int)
-            data = data.dropna(subset=['Channel'])
-            
-            # Melt the block into a long format
-            long_df = pd.melt(data, id_vars=['Year', 'Channel'], value_vars=months, var_name='Month', value_name='Value')
-            long_df['Metric'] = metric_name
-            
-            all_metrics_df = pd.concat([all_metrics_df, long_df], ignore_index=True)
+            current_metric_data = raw_data.iloc[data_start_row_idx:next_metric_start_idx]
+
+            # Process each row in the current metric's data block
+            for _, row in current_metric_data.iterrows():
+                # Year is in Column D (index 3)
+                year_val = row[3]
+                # Channel is in Column E (index 4)
+                channel = row[4]
+                
+                if year_val == '' or channel == '':
+                    continue
+
+                # Monthly values start from Column F (index 5)
+                values = row[5:].tolist()
+                
+                for month, value in zip(months, values):
+                    if month != '' and value != '':
+                        all_metrics_data.append({
+                            'Metric': metric_name,
+                            'Year': int(year_val),
+                            'Channel': channel,
+                            'Month': month,
+                            'Value': value
+                        })
+
+        if not all_metrics_data:
+            st.error("Could not parse any data from the sheet. Please verify the sheet structure.")
+            return pd.DataFrame()
+
+        df = pd.DataFrame(all_metrics_data)
 
         # --- Final Cleaning and Calculations ---
-        # Identify percentage vs. numeric metrics
-        pct_metrics = [m for m in all_metrics_df['Metric'].unique() if '%' in m]
+        pct_metrics = [m for m in df['Metric'].unique() if '%' in m]
         
-        # Convert values to numeric, handling percentages correctly
         def clean_value(row):
             val_str = str(row['Value']).replace('%', '').replace('$', '').replace(',', '')
             val_num = pd.to_numeric(val_str, errors='coerce')
@@ -132,19 +159,20 @@ def load_and_transform_data():
                 return val_num / 100.0
             return val_num
             
-        all_metrics_df['Value'] = all_metrics_df.apply(clean_value, axis=1)
-        all_metrics_df.dropna(subset=['Value'], inplace=True)
+        df['Value'] = df.apply(clean_value, axis=1)
+        df.dropna(subset=['Value'], inplace=True)
         
-        all_metrics_df['Date'] = pd.to_datetime(all_metrics_df['Year'].astype(str) + '-' + all_metrics_df['Month'], format='%Y-%b')
+        df['Date'] = pd.to_datetime(df['Year'].astype(str) + '-' + df['Month'], format='%Y-%b')
         
-        all_metrics_df = all_metrics_df.sort_values(by=['Metric', 'Channel', 'Date'])
-        all_metrics_df['MoM Change'] = all_metrics_df.groupby(['Metric', 'Channel'])['Value'].diff()
-        all_metrics_df['YoY Change'] = all_metrics_df.groupby(['Metric', 'Channel', all_metrics_df['Date'].dt.month])['Value'].diff()
+        df = df.sort_values(by=['Metric', 'Channel', 'Date'])
+        df['MoM Change'] = df.groupby(['Metric', 'Channel'])['Value'].diff()
+        df['YoY Change'] = df.groupby(['Metric', 'Channel', df['Date'].dt.month])['Value'].diff()
         
-        return all_metrics_df.sort_values(by='Date').reset_index(drop=True)
+        return df.sort_values(by='Date').reset_index(drop=True)
 
     except Exception as e:
         st.error(f"An error occurred while loading or transforming data: {e}")
+        st.code(traceback.format_exc())
         return pd.DataFrame()
 
 # --- MAIN DASHBOARD ---
@@ -181,7 +209,6 @@ if not df.empty:
     df_metric = df[df['Metric'] == selected_metric]
     df_filtered = df_metric[df_metric['Year'] == selected_year]
     
-    # Determine if lower values are better (for color-coding deltas)
     lower_is_better = 'rate' in selected_metric.lower() or 'cost' in selected_metric.lower()
 
     # --- KPI OVERVIEW ---
@@ -190,7 +217,6 @@ if not df.empty:
     latest_amazon = df_filtered[df_filtered['Channel'] == 'Amazon'].iloc[-1] if not df_filtered[df_filtered['Channel'] == 'Amazon'].empty else None
     latest_b2b = df_filtered[df_filtered['Channel'] == 'B2B'].iloc[-1] if not df_filtered[df_filtered['Channel'] == 'B2B'].empty else None
 
-    # Determine value format
     is_percent = '%' in selected_metric
     is_currency = 'cost' in selected_metric.lower()
     value_format = "{:,.2%}" if is_percent else ("${:,.2f}" if is_currency else "{:,.0f}")
@@ -234,11 +260,9 @@ if not df.empty:
         fig = go.Figure()
 
         for channel, color in [('Amazon', '#ff9900'), ('B2B', '#1c83e1')]:
-            # Current year data
             channel_df = df_filtered[df_filtered['Channel'] == channel]
             if not channel_df.empty:
                 fig.add_trace(go.Scatter(x=channel_df['Date'].dt.month, y=channel_df['Value'], name=f'{channel} ({selected_year})', mode='lines+markers', line=dict(color=color, width=3)))
-            # Previous year data
             channel_df_prev = df_previous_year[df_previous_year['Channel'] == channel]
             if not channel_df_prev.empty:
                 fig.add_trace(go.Scatter(x=channel_df_prev['Date'].dt.month, y=channel_df_prev['Value'], name=f'{channel} ({selected_year - 1})', mode='lines', line=dict(color=color, width=2, dash='dash')))
@@ -246,7 +270,7 @@ if not df.empty:
         fig.update_layout(
             title_text=f"{selected_metric} Trend",
             template="plotly_dark",
-            yaxis_tickformat= ('.2%' if is_percent else (None if is_currency else ',.0f')),
+            yaxis_tickformat=('.2%' if is_percent else ('${:,.2f}' if is_currency else ',.0f')),
             yaxis_title=selected_metric,
             plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)',
             legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
