@@ -119,6 +119,7 @@ def load_and_transform_data():
             if row[2] != '' and row[3] == '' and row[4] == '':
                 current_metric = row[2]
                 current_months = [] # Reset months for new metric
+                current_year = None # Reset year for new metric
                 continue
 
             # Condition 2: Is this a month header row? (e.g., "Jan", "Feb", ...)
@@ -133,25 +134,30 @@ def load_and_transform_data():
                 continue
 
             # Condition 3: Is this a data row?
-            # It has a year in Column D.
-            year_val = row[3]
-            if year_val.isnumeric():
-                current_year = int(float(year_val)) # Update the current year
+            # First, see if we need to update the current year context for the block.
+            if row[3].isnumeric():
+                current_year = int(float(row[3]))
             
+            # A row is a data row if we have a year context AND (it has a channel OR it's a row like 'Total Orders' which has a year but no channel).
             channel = row[4]
-            # A row is a data row if we have a year, a channel, and are inside a metric block
-            if current_year is not None and channel != '' and current_metric is not None and current_months:
-                values = row[month_start_col : month_start_col + len(current_months)]
-                
-                for month, value in zip(current_months, values):
-                    if value != '':
-                        all_metrics_data.append({
-                            'Metric': current_metric,
-                            'Year': current_year,
-                            'Channel': channel,
-                            'Month': month,
-                            'Value': value
-                        })
+            if current_year is not None and current_metric is not None and current_months:
+                # A row is valid if it has a channel, OR if it doesn't have a channel but it's the same row where we just found a year.
+                if channel != '' or row[3].isnumeric():
+                    # If channel is empty, use a default
+                    if channel == '':
+                        channel = 'Overall'
+                    
+                    values = row[month_start_col : month_start_col + len(current_months)]
+                    
+                    for month, value in zip(current_months, values):
+                        if value != '':
+                            all_metrics_data.append({
+                                'Metric': current_metric,
+                                'Year': current_year,
+                                'Channel': channel,
+                                'Month': month,
+                                'Value': value
+                            })
 
         if not all_metrics_data:
             st.error("Could not parse any data from the sheet. Please verify the sheet structure matches the expected format (Metric Title in C, Year in D, Channel in E, Months starting in F).")
