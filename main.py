@@ -261,4 +261,96 @@ def render_kpi_summary(df, metric, year):
     df_metric = df[df['Metric'] == metric]
     df_filtered = df_metric[df_metric['Year'] == year]
     
-    st.subheade
+    st.subheader(f"Executive Summary: {metric} ({year})")
+    
+    channels = df_filtered['Channel'].unique()
+    cols = st.columns(len(channels) if len(channels) > 0 else 1)
+
+    is_percent = '%' in metric
+    is_currency = 'cost' in metric.lower()
+    value_format = "{:,.2%}" if is_percent else ("${:,.2f}" if is_currency else "{:,.0f}")
+    lower_is_better = 'rate' in metric.lower() or 'cost' in metric.lower()
+
+    for i, channel in enumerate(channels):
+        with cols[i]:
+            latest_data = df_filtered[df_filtered['Channel'] == channel].iloc[-1] if not df_filtered[df_filtered['Channel'] == channel].empty else None
+            if latest_data is not None:
+                st.metric(label=f"{channel} ({latest_data['Month']})", value=value_format.format(latest_data['Value']))
+                yoy_change = latest_data['YoY Change']
+                if pd.notna(yoy_change):
+                    yoy_color = "green" if (yoy_change < 0 and lower_is_better) or (yoy_change > 0 and not lower_is_better) else "red"
+                    st.markdown(f"<p style='color:{yoy_color};'>{yoy_change:+.2%} vs. Last Year</p>", unsafe_allow_html=True)
+
+def render_line_chart(df, title, metric, year):
+    df_metric = df[df['Metric'] == metric]
+    df_current_year = df_metric[df_metric['Year'] == year]
+    df_previous_year = df_metric[df_metric['Year'] == year - 1]
+    
+    st.subheader(title)
+    fig = go.Figure()
+
+    channels = df_current_year['Channel'].unique()
+    colors = px.colors.qualitative.Plotly
+    
+    for i, channel in enumerate(channels):
+        color = colors[i % len(colors)]
+        # Current year
+        df_ch = df_current_year[df_current_year['Channel'] == channel]
+        if not df_ch.empty:
+            fig.add_trace(go.Scatter(x=df_ch['Date'].dt.month, y=df_ch['Value'], name=f'{channel} ({year})', mode='lines+markers', line=dict(color=color, width=3)))
+        # Previous year
+        df_ch_prev = df_previous_year[df_previous_year['Channel'] == channel]
+        if not df_ch_prev.empty:
+            fig.add_trace(go.Scatter(x=df_ch_prev['Date'].dt.month, y=df_ch_prev['Value'], name=f'{channel} ({year - 1})', mode='lines', line=dict(color=color, width=2, dash='dash')))
+
+    is_percent = '%' in metric
+    is_currency = 'cost' in metric.lower()
+    
+    fig.update_layout(template="plotly_dark", yaxis_tickformat=('.1%' if is_percent else ('$,.0f' if is_currency else ',.0f')), plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)', legend=dict(orientation="h", y=1.15, x=0.5, xanchor="center"), xaxis=dict(tickmode='array', tickvals=list(range(1, 13)), ticktext=['J', 'F', 'M', 'A', 'M', 'J', 'J', 'A', 'S', 'O', 'N', 'D']))
+    st.plotly_chart(fig, use_container_width=True)
+
+# --- MAIN APP LOGIC ---
+st.title("📊 Quality Department KPI Dashboard")
+
+df = load_and_transform_data()
+
+if not df.empty:
+    with st.sidebar:
+        st.header("Dashboard Mode")
+        dashboard_mode = st.radio("Choose Dashboard Type", ["Curated Dashboard", "AI-Generated Dashboard"], label_visibility="collapsed")
+        st.markdown("---")
+
+        st.header("Controls")
+        available_metrics = sorted(df['Metric'].unique())
+        selected_metric = st.selectbox("Select KPI", available_metrics)
+        available_years = sorted(df['Year'].unique(), reverse=True)
+        selected_year = st.selectbox("Select Year", available_years)
+        
+        st.markdown("---")
+        st.header("AI Configuration")
+        available_models = AIDashboardGenerator.get_available_models()
+        model_choice = st.selectbox("Choose AI Model", available_models) if available_models else None
+        
+        if st.button("🔄 Refresh Data"):
+            st.cache_data.clear()
+            st.rerun()
+        
+        st.markdown("---")
+        st.markdown("<div class='footer'><p>For questions or feedback, please <a href='mailto:alexander.popoff@vivehealth.com'>contact the Quality Dept</a>.</p></div>", unsafe_allow_html=True)
+
+    if dashboard_mode == "Curated Dashboard":
+        render_kpi_summary(df, selected_metric, selected_year)
+        st.markdown("---")
+        render_line_chart(df, f"Performance Trends: {selected_year} vs. {selected_year - 1}", selected_metric, selected_year)
+    
+    elif dashboard_mode == "AI-Generated Dashboard":
+        if not model_choice:
+            st.warning("Please select an AI model in the sidebar to generate a dashboard.")
+        else:
+            with st.spinner(f"🤖 Asking {model_choice} to design the dashboard..."):
+                data_summary = f"Available Metrics: {df['Metric'].unique().tolist()}. Available Years: {df['Year'].unique().tolist()}."
+                ai_layout = AIDashboardGenerator.get_ai_layout(data_summary, model_choice)
+                AIDashboardGenerator.render_dashboard(ai_layout, df)
+
+else:
+    st.warning("Data could not be loaded. Please check the Google Sheet is shared correctly and the format is as expected.")
