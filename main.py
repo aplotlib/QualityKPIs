@@ -6,13 +6,6 @@ import plotly.graph_objects as go
 import json
 from typing import List, Optional
 
-# --- Dependency Check ---
-try:
-    import openai
-    OPENAI_AVAILABLE = True
-except ImportError:
-    OPENAI_AVAILABLE = False
-
 # --- PAGE CONFIGURATION ---
 st.set_page_config(
     page_title="Quality & Product Dashboard",
@@ -35,22 +28,71 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 
-# --- DATA LOADING ---
-@st.cache_data(ttl=3600)
-def load_and_transform_data(file_path: str) -> pd.DataFrame:
+# --- DATA PARSING ENGINE for UPLOADED FILE ---
+@st.cache_data
+def parse_and_transform_data(uploaded_file) -> pd.DataFrame:
     """
-    Loads data from the clean CSV file and calculates Year-over-Year change.
+    Reads the user's uploaded messy CSV file and transforms it into a clean, tidy DataFrame.
+    This is the core logic for handling the specific multi-table format.
     """
     try:
-        df = pd.read_csv(file_path)
-        df['Date'] = pd.to_datetime(df['Date'])
-    except FileNotFoundError:
-        st.error(f"Fatal Error: The data file '{file_path}' was not found. Please ensure it is in the same directory as the app.")
+        raw_df = pd.read_csv(uploaded_file, header=None).fillna('')
+    except Exception as e:
+        st.error(f"Error reading the CSV file: {e}")
         return pd.DataFrame()
 
-    df = df.sort_values(by=['Metric', 'Date'])
-    df['YoY Change'] = df.groupby('Metric')['Value'].diff(12) # Assumes 12 months for YoY
-    return df
+    all_metrics_data = []
+    current_metric, current_months, current_year = None, [], None
+
+    for _, row_series in raw_df.iterrows():
+        row = row_series.tolist()
+        # Condition 1: Is this a METRIC TITLE row? (e.g., "Overall Return Rate")
+        if row[2] and not row[3] and not row[4]:
+            current_metric, current_months, current_year = row[2], [], None
+            continue
+        # Condition 2: Is this a MONTH HEADER row?
+        if row[5] == 'Jan':
+            current_months = [m for m in row[5:] if m and 'Total' not in m]
+            continue
+        
+        if not (current_metric and current_months): continue
+        if str(row[3]).isnumeric(): current_year = int(float(row[3]))
+        
+        # Condition 3: Is this a DATA row?
+        if current_year and (row[4] or str(row[3]).isnumeric()):
+            # All data is aggregated under 'Overall' channel for simplicity and accuracy
+            for month, value in zip(current_months, row[5:]):
+                if value:
+                    all_metrics_data.append({
+                        'Metric': current_metric.strip(),
+                        'Year': current_year,
+                        'Month': month,
+                        'Value': value
+                    })
+
+    if not all_metrics_data:
+        st.error("Could not parse any structured data from the file. Please ensure it follows the expected format.")
+        return pd.DataFrame()
+
+    df = pd.DataFrame(all_metrics_data)
+
+    # --- Data Cleaning and Final Calculations ---
+    df['Value'] = pd.to_numeric(df['Value'].astype(str).str.replace(r'[%,$]', '', regex=True), errors='coerce')
+    df.dropna(subset=['Value'], inplace=True)
+    
+    # Identify which metrics were originally percentages to scale them correctly
+    pct_metrics = [
+        "Overall Return Rate", "% Order inspected", "% Reworks"
+    ]
+    for m in pct_metrics:
+        df.loc[df['Metric'] == m, 'Value'] /= 100.0
+
+    df['Date'] = pd.to_datetime(df['Year'].astype(str) + '-' + df['Month'], format='%Y-%b')
+    df.sort_values(by=['Metric', 'Date'], inplace=True)
+
+    # Calculate YoY change by comparing to the value 12 periods ago
+    df['YoY Change'] = df.groupby('Metric')['Value'].diff(12)
+    return df.reset_index(drop=True)
 
 # --- AI ANALYTICS ENGINE ---
 class AIAnalyzer:
@@ -59,12 +101,12 @@ class AIAnalyzer:
         df_metric = df[(df['Metric'] == metric) & (df['Year'] == year)]
         if df_metric.empty: return "No data available."
         latest = df_metric.sort_values('Date').iloc[-1]
-        summary = f"Analysis for '{metric}' for {year}: Latest value is {latest['Value']:.2f} ({latest['Date']:%b %Y}), with a YoY change of {latest['YoY Change']:.2f}. The last 3 months are: {df_metric.tail(3)['Value'].tolist()}"
+        yoy_change_str = f"{latest['YoY Change']:.2f}" if pd.notna(latest['YoY Change']) else "N/A"
+        summary = f"Analysis for '{metric}' for {year}: Latest value is {latest['Value']:.2f} ({latest['Date']:%b %Y}), with a YoY change of {yoy_change_str}. The last 3 months are: {df_metric.tail(3)['Value'].tolist()}"
         return summary
 
     @staticmethod
     def generate_insights(data_summary: str, metric_name: str, api_key: str) -> Optional[List[str]]:
-        if not OPENAI_AVAILABLE: return ["Error: The `openai` library is not installed."]
         try:
             client = openai.OpenAI(api_key=api_key)
             prompt = f"""As a Principal Data Analyst, provide 1-2 sharp, actionable insights for a business owner based on the following data summary for the KPI '{metric_name}'. Address the owner directly and be concise. Return your response as a JSON object with a single key "insights" which contains a list of strings.
@@ -122,7 +164,7 @@ def render_chart(df: pd.DataFrame, metric: str, year: int, issue_composition_mod
         else:
             fig.add_trace(go.Bar(x=df_curr['Date'], y=df_curr['Value'], name=f'{year}', marker_color='#3b82f6'))
 
-        goal_map = {"Overall Return Rate (%)": 0.03, "% Reworks (%)": 0.05, "Average Cost per Inspection ($)": 2.0}
+        goal_map = {"Overall Return Rate": 0.03, "% Reworks": 0.05, "Average Cost per Inspection ($)": 2.0}
         if metric in goal_map: fig.add_hline(y=goal_map[metric], line_dash="dot", annotation_text="Goal", annotation_position="bottom right", line_color="gray")
         
         is_percent, is_currency = '%' in metric, '$' in metric
@@ -131,11 +173,19 @@ def render_chart(df: pd.DataFrame, metric: str, year: int, issue_composition_mod
         
     st.plotly_chart(fig, use_container_width=True)
 
+
 # --- MAIN APP ---
 st.title("✅ Quality & Product Dashboard")
 
-# Use the new, simplified data loading function
-df = load_and_transform_data('quality_data_clean.csv')
+# --- FILE UPLOADER ---
+uploaded_file = st.file_uploader("Choose your Quality KPI CSV file", type="csv")
+
+if uploaded_file is None:
+    st.info("Please upload your data file to begin analysis.")
+    st.stop()
+
+# --- Process the uploaded file and render the dashboard ---
+df = parse_and_transform_data(uploaded_file)
 
 if df.empty:
     st.stop()
@@ -143,8 +193,10 @@ if df.empty:
 # --- SIDEBAR ---
 with st.sidebar:
     st.header("Dashboard Controls")
-    order_metrics = ["Overall Return Rate (%)", "Total Orders", "Orders inspected", "% Order inspected (%)", "Total cost of inspection ($)", "Average Cost per Inspection ($)", "# Reworks", "% Reworks (%)"]
-    issue_metrics = ["Tickets Handled", "Full replacements (same day)", "Replacement parts (next day)", "Returns (w/in 3 days)", "Other cases: unresolved"]
+    # Dynamically get metric lists from the processed dataframe
+    all_kpis = df['Metric'].unique()
+    order_metrics = [kpi for kpi in all_kpis if any(term in kpi for term in ['Order', 'Inspect', 'Cost', 'Rework', 'Return'])]
+    issue_metrics = [kpi for kpi in all_kpis if any(term in kpi for term in ['Ticket', 'replacement', 'Return', 'unresolved'])]
     
     st.subheader("Metric Selection")
     metric_category = st.radio("Category", ["Order & Inspection KPIs", "Issue & Ticket KPIs"], label_visibility="collapsed")
@@ -159,14 +211,15 @@ with st.sidebar:
     st.markdown("---")
     st.header("AI Analysis")
     api_key = st.secrets.get("OPENAI_API_KEY") or st.secrets.get("openai_api_key")
+    if not api_key: st.warning("Set `OPENAI_API_KEY` in secrets to enable AI.")
     
     if st.button("🤖 Generate AI Insights", disabled=not api_key, use_container_width=True):
         summary = AIAnalyzer.get_data_summary(df, selected_metric, selected_year)
-        with st.spinner("Analyzing data..."):
-            st.session_state.ai_insights = AIAnalyzer.generate_insights(summary, selected_metric, api_key)
+        with st.spinner("Analyzing data..."): st.session_state.ai_insights = AIAnalyzer.generate_insights(summary, selected_metric, api_key)
         st.session_state.insights_for_metric = selected_metric
     
-    if not api_key: st.warning("Set `OPENAI_API_KEY` in secrets to enable AI.")
+    st.markdown("---")
+    st.markdown("<div class='footer'>Built for Leadership</div>", unsafe_allow_html=True)
 
 # --- MAIN PANEL DISPLAY ---
 if 'ai_insights' in st.session_state and st.session_state.get('insights_for_metric') == selected_metric:
