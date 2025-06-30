@@ -43,7 +43,6 @@ def load_and_transform_data() -> pd.DataFrame:
     Loads and transforms data from a stable, embedded sample source,
     built exclusively from the provided metric list.
     """
-    # This data structure is simplified and robust to prevent calculation errors.
     data = [
         # 2024 Data
         {'Metric': 'Total Orders', 'Year': 2024, 'Month': 'Jan', 'Value': 10000}, {'Metric': 'Total Orders', 'Year': 2024, 'Month': 'Feb', 'Value': 10200}, {'Metric': 'Total Orders', 'Year': 2024, 'Month': 'Mar', 'Value': 10500},
@@ -70,31 +69,33 @@ def load_and_transform_data() -> pd.DataFrame:
     df = pd.DataFrame(data)
 
     # --- Calculate Derived Metrics ---
-    # This approach is more stable than calculating inside the main loop
     derived_metrics = []
     for year in df['Year'].unique():
         for month in df['Month'].unique():
             df_month = df[(df['Year'] == year) & (df['Month'] == month)]
             if df_month.empty: continue
-
-            total_orders = df_month[df_month['Metric'] == 'Total Orders']['Value'].iloc[0]
-            orders_inspected = df_month[df_month['Metric'] == 'Orders inspected']['Value'].iloc[0]
-            reworks = df_month[df_month['Metric'] == '# Reworks']['Value'].iloc[0]
-            cost_inspection = df_month[df_month['Metric'] == 'Total cost of inspection ($)']['Value'].iloc[0]
-            returns = df_month[df_month['Metric'] == 'Returns (w/in 3 days)']['Value'].iloc[0]
-
-            derived_values = {
-                "% Order inspected (%)": (orders_inspected / total_orders) if total_orders else 0,
-                "% Reworks (%)": (reworks / orders_inspected) if orders_inspected else 0,
-                "Average Cost per Inspection ($)": (cost_inspection / orders_inspected) if orders_inspected else 0,
-                "Overall Return Rate (%)": (returns / total_orders) if total_orders else 0,
-            }
-            for name, value in derived_values.items():
-                derived_metrics.append({'Metric': name, 'Year': year, 'Month': month, 'Value': value})
+            
+            # Use .get(0) to gracefully handle cases where a metric might be missing for a month
+            total_orders = df_month[df_month['Metric'] == 'Total Orders']['Value'].get(0)
+            orders_inspected = df_month[df_month['Metric'] == 'Orders inspected']['Value'].get(0)
+            reworks = df_month[df_month['Metric'] == '# Reworks']['Value'].get(0)
+            cost_inspection = df_month[df_month['Metric'] == 'Total cost of inspection ($)']['Value'].get(0)
+            returns = df_month[df_month['Metric'] == 'Returns (w/in 3 days)']['Value'].get(0)
+            
+            if all(v is not None for v in [total_orders, orders_inspected, reworks, cost_inspection, returns]):
+                derived_values = {
+                    "% Order inspected (%)": (orders_inspected / total_orders) if total_orders else 0,
+                    "% Reworks (%)": (reworks / orders_inspected) if orders_inspected else 0,
+                    "Average Cost per Inspection ($)": (cost_inspection / orders_inspected) if orders_inspected else 0,
+                    "Overall Return Rate (%)": (returns / total_orders) if total_orders else 0,
+                }
+                for name, value in derived_values.items():
+                    derived_metrics.append({'Metric': name, 'Year': year, 'Month': month, 'Value': value})
     
-    df = pd.concat([df, pd.DataFrame(derived_metrics)], ignore_index=True)
+    if derived_metrics:
+        df = pd.concat([df, pd.DataFrame(derived_metrics)], ignore_index=True)
 
-    df['Date'] = pd.to_datetime(df['Year'].astype(str) + '-' + df['Month'], format='%Y-%b', errors='coerce')
+    df['Date'] = pd.to_datetime(df['Year'].astype(str) + '-' + df['Month'], format='%Y-%b')
     df.dropna(subset=['Value', 'Date'], inplace=True)
     df = df.sort_values(by=['Metric', 'Date'])
     df_prev = df.copy(); df_prev['Date'] += pd.DateOffset(years=1)
@@ -209,13 +210,25 @@ with st.sidebar:
     st.markdown("---")
     st.header("AI Analysis")
     api_key = st.secrets.get("OPENAI_API_KEY")
-    if not api_key: st.warning("Set `OPENAI_API_KEY` in secrets to enable AI.")
     
     if st.button("🤖 Generate AI Insights", disabled=not api_key, use_container_width=True):
         summary = AIAnalyzer.get_data_summary(df, selected_metric, selected_year)
         with st.spinner("Analyzing data..."): st.session_state.ai_insights = AIAnalyzer.generate_insights(summary, selected_metric, api_key)
         st.session_state.insights_for_metric = selected_metric
     
+    # --- NEW: Secrets & AI Status Debugger ---
+    with st.expander("Secrets & AI Status Debugger"):
+        st.write("Use this to verify your Streamlit secrets setup.")
+        if st.secrets.get("OPENAI_API_KEY"):
+            st.success("`OPENAI_API_KEY` found!")
+            st.info("The AI Insights button above is enabled.")
+        else:
+            st.error("`OPENAI_API_KEY` not found.")
+            st.info("The AI Insights button above is disabled. To fix this, add the key to your Streamlit secrets file or configuration.")
+        
+        st.write("All available secret keys found by the app:")
+        st.json([key for key in st.secrets.keys()])
+
     st.markdown("---")
     st.markdown("<div class='footer'>Built for Leadership</div>", unsafe_allow_html=True)
 
