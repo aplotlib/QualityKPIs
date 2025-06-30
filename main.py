@@ -9,7 +9,7 @@ from datetime import datetime
 # Set the page configuration for a professional look suitable for a large screen
 st.set_page_config(
     page_title="Quality KPI Dashboard",
-    page_icon="�",
+    page_icon="📊",
     layout="wide",
     initial_sidebar_state="collapsed"
 )
@@ -80,9 +80,11 @@ def load_and_clean_data():
     """
     try:
         conn = st.connection("gsheets", type=GSheetsConnection)
-        worksheet_name = "Quality "
+        
+        # Use the worksheet's GID (Grid ID) instead of its name for reliability.
+        # This is the number at the end of your Google Sheet URL (gid=799906691)
         data = conn.read(
-            worksheet=worksheet_name,
+            worksheet=799906691,
             usecols=[0, 1, 2],
             header=28
         )
