@@ -137,7 +137,7 @@ def load_and_transform_data():
                     if month != '' and value != '':
                         all_metrics_data.append({
                             'Metric': metric_name,
-                            'Year': int(year_val),
+                            'Year': int(float(year_val)), # FIX: Convert to float first, then to int
                             'Channel': channel,
                             'Month': month,
                             'Value': value
