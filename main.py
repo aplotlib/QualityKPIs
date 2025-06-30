@@ -91,25 +91,26 @@ def load_and_transform_data():
 
         # --- Data Transformation Logic ---
         # 1. Dynamically identify the start of the actual data table
-        # This robustly finds the first row where the second column is a 4-digit year.
-        year_rows = raw_data[raw_data[1].astype(str).str.match(r'^\d{4}$')]
+        # This robustly finds the first row where the third column (index 2) is a 4-digit year.
+        year_rows = raw_data[raw_data[2].astype(str).str.match(r'^\d{4}$')]
         if year_rows.empty:
-            st.error("Error: Could not find a starting year (e.g., 2025) in the second column of the Google Sheet.")
+            st.error("Error: Could not find a starting year (e.g., 2025) in the third column of the Google Sheet.")
             return pd.DataFrame()
         
         header_row_index = year_rows.index[0]
-        months = raw_data.iloc[header_row_index - 1, 2:].dropna().tolist()
+        # The months start in the 5th column (index 4)
+        months = raw_data.iloc[header_row_index - 1, 4:].dropna().tolist()
         
-        # 2. Slice the DataFrame to get only the relevant data rows and columns
-        data = raw_data.iloc[header_row_index:, 1:].reset_index(drop=True)
-        data.columns = ['Category'] + months
+        # 2. Slice the DataFrame to get only the relevant data rows and columns (C onwards)
+        data = raw_data.iloc[header_row_index:, 2:].reset_index(drop=True)
+        # The first two columns are Year and Channel, the rest are months
+        data.columns = ['Year', 'Channel'] + months
         
-        # 3. Forward-fill the year values and create a 'Channel' column
-        data['Year'] = data['Category'].where(data['Category'].astype(str).str.isnumeric()).ffill().astype(int)
-        data['Channel'] = data['Category'].where(~data['Category'].astype(str).str.isnumeric())
+        # 3. Forward-fill the year values
+        data['Year'] = data['Year'].ffill().astype(int)
         
-        # 4. Filter to keep only the channel rows and drop unnecessary columns
-        data = data.dropna(subset=['Channel']).drop(columns=['Category'])
+        # 4. Filter to keep only the channel rows (where 'Channel' is not NaN)
+        data = data.dropna(subset=['Channel'])
         
         # 5. "Melt" the DataFrame from wide to long format
         id_vars = ['Year', 'Channel']
