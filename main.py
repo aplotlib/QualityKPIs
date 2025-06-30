@@ -3,7 +3,6 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
-import traceback
 import json
 from typing import List, Dict, Any, Optional
 
@@ -24,7 +23,7 @@ except ImportError:
 # --- PAGE CONFIGURATION ---
 st.set_page_config(
     page_title="Quality KPI Dashboard",
-    page_icon="🤖",
+    page_icon="🚀",
     layout="wide",
     initial_sidebar_state="auto"
 )
@@ -32,38 +31,28 @@ st.set_page_config(
 # --- CUSTOM STYLING (CSS) ---
 st.markdown("""
 <style>
-    /* Main app background */
     .main .block-container {
-        padding-top: 2rem;
-        padding-bottom: 2rem;
+        padding: 2rem;
     }
-    /* Main title */
-    h1 {
+    h1, h2 {
         text-align: center;
-        padding-bottom: 1rem;
     }
-    /* Metric cards styling */
-    div[data-testid="stMetric"] {
+    h2 {
+        border-bottom: 1px solid #262730;
+        padding-bottom: 0.5rem;
+        margin-bottom: 1rem;
+    }
+    .stMetric {
         background-color: #0E1117;
         border: 1px solid #262730;
         border-radius: 10px;
-        padding: 20px;
-        box-shadow: 0 4px 12px 0 rgba(0,0,0,0.15);
+        padding: 1rem;
     }
-    div[data-testid="stMetricLabel"] {
-        font-size: 1.1rem;
-        color: #a0a4b8;
-    }
-    /* Footer styling */
     .footer {
         text-align: center;
         color: #a0a4b8;
         font-size: 0.9rem;
         padding-top: 2rem;
-    }
-    .footer a {
-        color: #1c83e1;
-        text-decoration: none;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -73,265 +62,251 @@ st.markdown("""
 @st.cache_data(ttl=3600)
 def load_and_transform_data() -> pd.DataFrame:
     """
-    Parses a complex multi-table format from the expanded embedded sample data
-    and returns a clean, tidy DataFrame for analysis.
+    Loads and transforms data from the embedded sample source.
+    The sample data now accurately reflects Amazon and B2B channels.
     """
-    try:
-        # --- Constants for Sheet Structure ---
-        COL_METRIC_TITLE, COL_YEAR, COL_CHANNEL, COL_MONTHS_START = 2, 3, 4, 5
-
-        # --- EXPANDED EMBEDDED SAMPLE DATA ---
-        sample_raw_data = [
-            # KPI 1: Overall Return Rate (%) - Lower is better
-            ['', '', 'Overall Return Rate (%)', '', '', '', '', '', '', '', '', ''],
-            ['', '', '', '', '', 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'],
-            ['', '', '', '2025', 'Amazon', '4.5%', '4.6%', '4.4%', '4.5%', '4.7%', '4.6%'],
-            ['', '', '', '2025', 'Walmart', '5.8%', '5.9%', '5.7%', '5.6%', '5.8%', '5.7%'],
-            ['', '', '', '2025', 'Overall', '5.0%', '5.1%', '4.9%', '4.9%', '5.1%', '5.0%'],
-            ['', '', '', '2024', 'Amazon', '5.1%', '5.3%', '5.0%', '4.8%', '4.9%', '5.2%', '5.1%', '4.9%', '5.0%', '5.2%', '5.4%', '5.3%'],
-            ['', '', '', '2024', 'Walmart', '6.2%', '6.0%', '6.1%', '5.9%', '5.8%', '6.3%', '6.2%', '6.1%', '6.0%', '6.2%', '6.4%', '6.3%'],
-            ['', '', '', '2024', 'Overall', '5.5%', '5.6%', '5.4%', '5.2%', '5.3%', '5.7%', '5.6%', '5.4%', '5.4%', '5.6%', '5.8%', '5.7%'],
-            ['', '', '', '2023', 'Amazon', '4.8%', '4.9%', '4.7%', '4.6%', '4.7%', '4.8%', '4.9%', '5.0%', '5.1%', '5.2%', '5.3%', '5.4%'],
-            ['', '', '', '2023', 'Walmart', '5.9%', '5.8%', '5.7%', '5.6%', '5.5%', '5.6%', '5.7%', '5.8%', '5.9%', '6.0%', '6.1%', '6.2%'],
-            ['', '', '', '2023', 'Overall', '5.2%', '5.3%', '5.1%', '5.0%', '5.1%', '5.2%', '5.3%', '5.4%', '5.5%', '5.6%', '5.7%', '5.8%'],
-            ['', '', '', '', '', '', '', '', '', '', '', ''],
-            # KPI 2: Customer Satisfaction (CSAT) - Higher is better
-            ['', '', 'Customer Satisfaction (CSAT)', '', '', '', '', '', '', '', '', ''],
-            ['', '', '', '', '', 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'],
-            ['', '', '', '2025', 'Phone Support', '4.3', '4.4', '4.2', '4.5', '4.4', '4.5'],
-            ['', '', '', '2025', 'Email Support', '4.6', '4.7', '4.6', '4.7', '4.8', '4.7'],
-            ['', '', '', '2025', 'Overall', '4.4', '4.5', '4.4', '4.6', '4.6', '4.6'],
-            ['', '', '', '2024', 'Phone Support', '4.1', '4.2', '4.0', '4.2', '4.3', '4.1', '4.2', '4.3', '4.4', '4.2', '4.3', '4.4'],
-            ['', '', '', '2024', 'Email Support', '4.5', '4.6', '4.5', '4.4', '4.5', '4.6', '4.7', '4.6', '4.5', '4.6', '4.7', '4.8'],
-            ['', '', '', '2024', 'Overall', '4.3', '4.4', '4.2', '4.3', '4.4', '4.3', '4.4', '4.4', '4.4', '4.4', '4.5', '4.6'],
-            ['', '', '', '', '', '', '', '', '', '', '', ''],
-            # KPI 3: First Contact Resolution (%) - Higher is better
-            ['', '', 'First Contact Resolution (%)', '', '', '', '', '', '', '', '', ''],
-            ['', '', '', '', '', 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'],
-            ['', '', '', '2025', 'Phone Support', '78%', '79%', '77%', '80%', '81%', '80%'],
-            ['', '', '', '2025', 'Email Support', '88%', '89%', '88%', '90%', '91%', '90%'],
-            ['', '', '', '2025', 'Overall', '82%', '83%', '81%', '84%', '85%', '84%'],
-            ['', '', '', '2024', 'Phone Support', '75%', '76%', '74%', '75%', '76%', '77%', '76%', '78%', '79%', '78%', '77%', '78%'],
-            ['', '', '', '2024', 'Email Support', '85%', '86%', '86%', '87%', '88%', '87%', '88%', '89%', '90%', '89%', '88%', '89%'],
-            ['', '', '', '2024', 'Overall', '79%', '80%', '79%', '80%', '81%', '81%', '81%', '82%', '83%', '82%', '81%', '82%'],
-            ['', '', '', '', '', '', '', '', '', '', '', ''],
-            # KPI 4: Average Handling Time (sec) - Lower is better
-            ['', '', 'Average Handling Time (sec)', '', '', '', '', '', '', '', '', ''],
-            ['', '', '', '', '', 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'],
-            ['', '', '', '2025', 'Phone Support', '295', '298', '290', '285', '288', '292'],
-            ['', '', '', '2025', 'Email Support', '450', '455', '448', '440', '445', '452'],
-            ['', '', '', '2025', 'Overall', '373', '377', '369', '363', '367', '372'],
-            ['', '', '', '2024', 'Phone Support', '310', '305', '308', '300', '299', '301', '303', '298', '295', '296', '294', '290'],
-            ['', '', '', '2024', 'Email Support', '480', '475', '478', '470', '465', '468', '472', '460', '455', '458', '454', '450'],
-            ['', '', '', '2024', 'Overall', '395', '390', '393', '385', '382', '385', '388', '379', '375', '377', '374', '370'],
-        ]
-        raw_data = pd.DataFrame(sample_raw_data).fillna('').astype(str)
-
-        all_metrics_data = []
-        current_metric: Optional[str] = None
-        current_months: List[str] = []
-        current_year: Optional[int] = None
-
-        for _, row_series in raw_data.iterrows():
-            row = row_series.tolist()
-            if row[COL_METRIC_TITLE] and not row[COL_YEAR] and not row[COL_CHANNEL]:
-                current_metric, current_months, current_year = row[COL_METRIC_TITLE], [], None
-                continue
-            if row[COL_MONTHS_START] == 'Jan':
-                current_months = [m for m in row[COL_MONTHS_START:] if m and 'Total' not in m]
-                continue
-            if not (current_metric and current_months): continue
-            if row[COL_YEAR].isnumeric(): current_year = int(float(row[COL_YEAR]))
-            channel = row[COL_CHANNEL] if row[COL_CHANNEL] else 'Overall'
-            if current_year and (row[COL_CHANNEL] or row[COL_YEAR].isnumeric()):
-                for month, value in zip(current_months, row[COL_MONTHS_START:]):
-                    if value:
-                        all_metrics_data.append({'Metric': current_metric, 'Year': current_year, 'Channel': channel, 'Month': month, 'Value': value})
-        
-        df = pd.DataFrame(all_metrics_data)
-        pct_metrics = [m for m in df['Metric'].unique() if '%' in m]
-        
-        def clean_value(row: pd.Series) -> Optional[float]:
-            val_str = str(row['Value']).replace('%', '').replace('$', '').replace(',', '')
-            val_num = pd.to_numeric(val_str, errors='coerce')
-            if pd.isna(val_num): return None
-            return val_num / 100.0 if row['Metric'] in pct_metrics else val_num
-        
-        df['Value'] = df.apply(clean_value, axis=1)
-        df.dropna(subset=['Value'], inplace=True)
-        df['Date'] = pd.to_datetime(df['Year'].astype(str) + '-' + df['Month'], errors='coerce')
-        df.dropna(subset=['Date'], inplace=True)
-        df = df.sort_values(by=['Metric', 'Channel', 'Date'])
-        df_prev = df.copy()
-        df_prev['Date'] += pd.DateOffset(years=1)
-        df = pd.merge(df, df_prev[['Metric', 'Channel', 'Date', 'Value']], on=['Metric', 'Channel', 'Date'], how='left', suffixes=('', '_prev'))
-        df['YoY Change'] = df['Value'] - df['Value_prev']
-        return df.sort_values(by='Date').reset_index(drop=True)
-
-    except Exception as e:
-        st.error(f"An error occurred during data processing: {e}")
-        st.code(traceback.format_exc())
-        return pd.DataFrame()
+    # --- EMBEDDED SAMPLE DATA (Corrected for Amazon & B2B) ---
+    sample_raw_data = [
+        # KPI 1: Overall Return Rate (%) - B2B now has a lower, more stable rate.
+        ['', '', 'Overall Return Rate (%)', '', '', '', '', '', '', '', '', ''],
+        ['', '', '', '', '', 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'],
+        ['', '', '', '2025', 'Amazon', '4.5%', '4.6%', '4.4%', '4.5%', '4.7%', '4.6%'],
+        ['', '', '', '2025', 'B2B', '3.1%', '3.0%', '3.2%', '3.1%', '3.0%', '3.1%'],
+        ['', '', '', '2025', 'Overall', '4.1%', '4.2%', '4.0%', '4.1%', '4.2%', '4.1%'],
+        ['', '', '', '2024', 'Amazon', '5.1%', '5.3%', '5.0%', '4.8%', '4.9%', '5.2%', '5.1%', '4.9%', '5.0%', '5.2%', '5.4%', '5.3%'],
+        ['', '', '', '2024', 'B2B', '3.5%', '3.4%', '3.6%', '3.5%', '3.4%', '3.5%', '3.6%', '3.5%', '3.4%', '3.5%', '3.6%', '3.5%'],
+        ['', '', '', '2024', 'Overall', '4.6%', '4.7%', '4.5%', '4.4%', '4.4%', '4.7%', '4.6%', '4.5%', '4.5%', '4.7%', '4.8%', '4.7%'],
+        ['', '', '', '', '', '', '', '', '', '', '', ''],
+        # The following KPIs are tied to support channels (Phone/Email) and are not specific to sales channels.
+        ['', '', 'Customer Satisfaction (CSAT)', '', ''],
+        ['', '', '', '', '', 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'],
+        ['', '', '', '2025', 'Phone Support', '4.3', '4.4', '4.2', '4.5', '4.4', '4.5'],
+        ['', '', '', '2025', 'Email Support', '4.6', '4.7', '4.6', '4.7', '4.8', '4.7'],
+        ['', '', '', '2025', 'Overall', '4.4', '4.5', '4.4', '4.6', '4.6', '4.6'],
+        ['', '', '', '2024', 'Phone Support', '4.1', '4.2', '4.0', '4.2', '4.3', '4.1', '4.2', '4.3', '4.4', '4.2', '4.3', '4.4'],
+        ['', '', '', '2024', 'Email Support', '4.5', '4.6', '4.5', '4.4', '4.5', '4.6', '4.7', '4.6', '4.5', '4.6', '4.7', '4.8'],
+        ['', '', '', '', '', '', '', '', '', '', '', ''],
+        ['', '', 'First Contact Resolution (%)', '', ''],
+        ['', '', '', '', '', 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'],
+        ['', '', '', '2025', 'Phone Support', '78%', '79%', '77%', '80%', '81%', '80%'],
+        ['', '', '', '2025', 'Email Support', '88%', '89%', '88%', '90%', '91%', '90%'],
+        ['', '', '', '2025', 'Overall', '82%', '83%', '81%', '84%', '85%', '84%'],
+        ['', '', '', '2024', 'Phone Support', '75%', '76%', '74%', '75%', '76%', '77%', '76%', '78%', '79%', '78%', '77%', '78%'],
+        ['', '', '', '2024', 'Email Support', '85%', '86%', '86%', '87%', '88%', '87%', '88%', '89%', '90%', '89%', '88%', '89%'],
+        ['', '', '', '', '', '', '', '', '', '', '', ''],
+        ['', '', 'Average Handling Time (sec)', '', ''],
+        ['', '', '', '', '', 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'],
+        ['', '', '', '2025', 'Phone Support', '295', '298', '290', '285', '288', '292'],
+        ['', '', '', '2025', 'Email Support', '450', '455', '448', '440', '445', '452'],
+        ['', '', '', '2025', 'Overall', '373', '377', '369', '363', '367', '372'],
+        ['', '', '', '2024', 'Phone Support', '310', '305', '308', '300', '299', '301', '303', '298', '295', '296', '294', '290'],
+        ['', '', '', '2024', 'Email Support', '480', '475', '478', '470', '465', '468', '472', '460', '455', '458', '454', '450'],
+    ]
+    raw_data = pd.DataFrame(sample_raw_data).fillna('')
+    all_metrics, current_metric, current_months, current_year = [], None, [], None
+    for _, row_series in raw_data.iterrows():
+        row = row_series.tolist()
+        if row[2] and not row[3] and not row[4]: current_metric, current_months, current_year = row[2], [], None; continue
+        if row[5] == 'Jan': current_months = [m for m in row[5:] if m and 'Total' not in m]; continue
+        if not (current_metric and current_months): continue
+        if str(row[3]).isnumeric(): current_year = int(float(row[3]))
+        channel = row[4] if row[4] else 'Overall'
+        if current_year and (row[4] or str(row[3]).isnumeric()):
+            for month, value in zip(current_months, row[5:]):
+                if value: all_metrics.append({'Metric': current_metric, 'Year': current_year, 'Channel': channel, 'Month': month, 'Value': value})
+    df = pd.DataFrame(all_metrics)
+    pct_metrics = [m for m in df['Metric'].unique() if '%' in m]
+    def clean_value(row):
+        val_str = str(row['Value']).replace('%', '').replace('$', '').replace(',', '')
+        return pd.to_numeric(val_str, errors='coerce') / 100.0 if row['Metric'] in pct_metrics else pd.to_numeric(val_str, errors='coerce')
+    df['Value'] = df.apply(clean_value, axis=1)
+    df['Date'] = pd.to_datetime(df['Year'].astype(str) + '-' + df['Month'], errors='coerce')
+    df.dropna(inplace=True)
+    df = df.sort_values(by=['Metric', 'Channel', 'Date'])
+    df_prev = df.copy(); df_prev['Date'] += pd.DateOffset(years=1)
+    df = pd.merge(df, df_prev[['Metric', 'Channel', 'Date', 'Value']], on=['Metric', 'Channel', 'Date'], how='left', suffixes=('', '_prev'))
+    df['YoY Change'] = df['Value'] - df['Value_prev']
+    return df.sort_values(by='Date').reset_index(drop=True)
 
 
-# --- AI DASHBOARD GENERATOR ---
+# --- AI ANALYTICS ENGINE ---
 class AIDashboardGenerator:
-    """Uses Generative AI to dynamically create a dashboard layout."""
     @staticmethod
-    def get_ai_layout(data_summary: str, model_choice: str, api_key: str) -> Dict[str, Any]:
-        """Prompts an AI model to return a JSON layout for the dashboard."""
-        client, model_name = None, ""
-        try:
-            if "Claude" in model_choice:
-                if not ANTHROPIC_AVAILABLE: return {"error": "Anthropic library not installed. Please add it to your requirements.txt."}
-                client = anthropic.Anthropic(api_key=api_key)
-                model_name = "claude-3-5-sonnet-20240620"
-            elif "GPT" in model_choice:
-                if not OPENAI_AVAILABLE: return {"error": "OpenAI library not installed. Please add it to your requirements.txt."}
-                client = openai.OpenAI(api_key=api_key)
-                model_name = "gpt-4o"
-            else:
-                return {"error": "Invalid model choice."}
-        except Exception as e:
-            return {"error": f"Failed to initialize AI client: {e}. Is your API key correct?"}
+    def get_data_summary_for_ai(df, metric, year):
+        df_metric = df[(df['Metric'] == metric) & (df['Year'] == year)]
+        if df_metric.empty: return "No data available."
+        
+        summary_parts = []
+        for channel in ['Overall', 'Amazon', 'B2B']:
+            if channel not in df_metric['Channel'].unique(): continue
+            channel_df = df_metric[df_metric['Channel'] == channel]
+            latest = channel_df.sort_values('Date').iloc[-1]
+            summary_parts.append(f"- For **{channel}**: Latest value is **{latest['Value']:.2f}** ({latest['Date']:%b %Y}), with a YoY change of **{latest['YoY Change']:.2f}**.")
+        
+        return "\n".join(summary_parts)
 
+    @staticmethod
+    def get_ai_layout(data_summary: str, metric_name: str, model_choice: str, api_key: str) -> Dict[str, Any]:
+        client, model_name_api = (anthropic.Anthropic(api_key=api_key), "claude-3-5-sonnet-20240620") if "Claude" in model_choice else (openai.OpenAI(api_key=api_key), "gpt-4o")
+        
         prompt = f"""
-        You are a data visualization expert designing a Streamlit dashboard.
-        Based on the data summary, create a layout. Return ONLY a valid JSON object.
-        JSON: {{"layout": [{{"type": "component", "params": {{...}}}}]}}
-        Components: "title", "kpi_summary", "line_chart".
-        Params for kpi_summary & line_chart: "metric", "year".
-        Data Summary: {data_summary}
-        Design an insightful layout for the most recent year's data.
+        You are a Principal Data Analyst reporting to a business owner. Your analysis must be sharp, concise, and business-focused.
+
+        **Task**:
+        1.  Analyze the following data summary for the KPI: **{metric_name}**.
+        2.  **Compare the performance between channels.** This is the most critical part of your analysis.
+        3.  Generate a bulleted list of 1-3 actionable insights. Address the owner directly (e.g., "Your return rate...").
+        4.  Create a JSON object containing two keys: "insights" and "layout". The layout must present the data to support your insights.
+
+        **Data Summary**:
+        {data_summary}
+
+        **JSON Output Structure**:
+        - `insights`: A list of your string insights.
+        - `layout`: An array of dashboard components. Available components: "title", "kpi_summary", "line_chart". You must include a `kpi_summary` and a `line_chart`.
+
+        **Example JSON**:
+        {{
+            "insights": [
+                "While your overall return rate is improving year-over-year, the B2B channel is outperforming Amazon significantly, representing a key strength.",
+                "The Amazon channel's return rate has ticked up in the last month, which warrants monitoring."
+            ],
+            "layout": [
+                {{"type": "kpi_summary", "params": {{"metric": "{metric_name}", "year": 2025}}}},
+                {{"type": "line_chart", "params": {{"title": "YoY Performance for {metric_name}", "metric": "{metric_name}", "year": 2025}}}}
+            ]
+        }}
         """
         try:
-            content = ""
             if "Claude" in model_choice:
-                response = client.messages.create(model=model_name, max_tokens=2048, messages=[{"role": "user", "content": prompt}])
+                response = client.messages.create(model=model_name_api, max_tokens=2048, messages=[{"role": "user", "content": prompt}])
                 content = response.content[0].text
             else:
-                response = client.chat.completions.create(model=model_name, messages=[{"role": "user", "content": prompt}], response_format={"type": "json_object"})
+                response = client.chat.completions.create(model=model_name_api, messages=[{"role": "user", "content": prompt}], response_format={"type": "json_object"})
                 content = response.choices[0].message.content
-            
-            if content.strip().startswith("```json"):
-                content = content.strip()[7:-4]
             return json.loads(content)
         except Exception as e:
-            error_message = str(e)
-            if "authentication" in error_message.lower():
-                return {"error": "Authentication failed. Please check if your API key is correct and active."}
-            return {"error": f"Failed to get or parse AI layout: {e}", "raw_response": str(content)}
-
-    @staticmethod
-    def render_dashboard(layout: Dict[str, Any], df: pd.DataFrame):
-        if "error" in layout:
-            st.error(f"AI Generation Failed: {layout['error']}")
-            if 'raw_response' in layout and layout['raw_response']:
-                st.code(layout['raw_response'], language="text")
-            return
-        for i, component in enumerate(layout.get("layout", [])):
-            comp_type, params = component.get("type"), component.get("params", {})
-            try:
-                if comp_type == "title": st.title(params.get("text"))
-                elif comp_type == "kpi_summary": render_kpi_summary(df, params.get("metric"), int(params.get("year")))
-                elif comp_type == "line_chart": render_line_chart(df, params.get("title"), params.get("metric"), int(params.get("year")))
-                if i < len(layout.get("layout", [])) - 1: st.markdown("---")
-            except Exception as e:
-                st.error(f"Error rendering AI component: `{comp_type}`. Reason: {e}")
-
+            return {"error": f"AI interaction failed: {e}"}
 
 # --- UI RENDERING FUNCTIONS ---
-def render_kpi_summary(df: pd.DataFrame, metric: str, year: int):
+def render_kpi_details(df: pd.DataFrame, metric: str, year: int):
+    st.subheader("📌 Key Metrics")
     df_metric = df[(df['Metric'] == metric) & (df['Year'] == year)]
     if df_metric.empty: st.warning(f"No data for '{metric}' in {year}."); return
-    st.subheader(f"Executive Summary: {metric} ({year})")
-    channels = sorted(df_metric['Channel'].unique())
-    cols = st.columns(min(len(channels), 4)) if channels else [st.container()]
+
+    channels = sorted([c for c in df_metric['Channel'].unique() if c != 'Overall'])
+    channels.insert(0, 'Overall') # Ensure Overall is first
     lower_is_better = any(term in metric.lower() for term in ['rate', 'cost', 'time'])
-    for i, channel in enumerate(channels):
-        latest_data = df_metric[df_metric['Channel'] == channel].sort_values('Date').iloc[-1]
+    
+    for channel in channels:
+        if channel not in df_metric['Channel'].unique(): continue
+        latest = df_metric[df_metric['Channel'] == channel].sort_values('Date').iloc[-1]
+        yoy_change = latest['YoY Change']
+        
+        is_good_change = pd.notna(yoy_change) and ((yoy_change < 0 and lower_is_better) or (yoy_change > 0 and not lower_is_better))
+        icon = "✅" if is_good_change else "⚠️"
+        
         is_percent, is_csat = '%' in metric, 'csat' in metric.lower()
-        if is_percent: value_format, delta_format = "{:,.1%}", "{:+.1f} pts"
-        elif is_csat: value_format, delta_format = "{:,.2f} ⭐", "{:+.2f}"
-        else: value_format, delta_format = "{:,.0f}", "{:+.0f}"
-        val_display = value_format.format(latest_data['Value'])
+        if is_percent: val_f, delta_f = "{:,.1%}", "{:+.1f} pts"
+        elif is_csat: val_f, delta_f = "{:,.2f} ⭐", "{:+.2f}"
+        else: val_f, delta_f = "{:,.0f}", "{:+.0f}"
+        
+        val_display = val_f.format(latest['Value'])
         delta_display = "No prior data"
-        if pd.notna(latest_data['YoY Change']): delta_display = f"{delta_format.format(latest_data['YoY Change'])} vs. prior year"
-        cols[i % len(cols)].metric(label=f"{channel} ({latest_data['Date']:%b %Y})", value=val_display, delta=delta_display, delta_color="inverse" if lower_is_better else "normal")
+        if pd.notna(yoy_change): delta_display = f"{icon} {delta_f.format(yoy_change)} vs. PY"
+        
+        st.metric(label=f"{channel} ({latest['Date']:%b %Y})", value=val_display, delta=delta_display, delta_color="off")
+        if channel != channels[-1]: st.markdown("---")
 
 def render_line_chart(df: pd.DataFrame, title: str, metric: str, year: int):
+    st.subheader(f"📊 {title}")
     df_metric = df[df['Metric'] == metric]
-    df_current, df_previous = df_metric[df_metric['Year'] == year], df_metric[df_metric['Year'] == year - 1]
-    if df_current.empty: return
-    st.subheader(title)
+    df_curr, df_prev = df_metric[df_metric['Year'] == year], df_metric[df_metric['Year'] == year - 1]
+    if df_curr.empty: return
+    
     fig = go.Figure()
     colors = px.colors.qualitative.Plotly
-    for i, channel in enumerate(sorted(df_current['Channel'].unique())):
-        color = colors[i % len(colors)]
-        df_ch_curr = df_current[df_current['Channel'] == channel].sort_values('Date')
-        if not df_ch_curr.empty:
-            fig.add_trace(go.Scatter(x=df_ch_curr['Date'].dt.month, y=df_ch_curr['Value'], name=f'{channel} ({year})', mode='lines+markers', line=dict(color=color, width=3)))
-            latest = df_ch_curr.iloc[-1]
-            anno_text = f"{latest['Value']:.1%}" if '%' in metric else f"{latest['Value']:.2f}" if 'csat' in metric.lower() else f"{latest['Value']:.0f}"
-            fig.add_annotation(x=latest['Date'].month, y=latest['Value'], text=anno_text, showarrow=True, arrowhead=2, ax=0, ay=-40, bordercolor="#c7c7c7", borderwidth=2, bgcolor="rgba(255,255,255,0.8)")
-        df_ch_prev = df_previous[df_previous['Channel'] == channel].sort_values('Date')
-        if not df_ch_prev.empty:
-            fig.add_trace(go.Scatter(x=df_ch_prev['Date'].dt.month, y=df_ch_prev['Value'], name=f'{channel} ({year - 1})', mode='lines', line=dict(color=color, width=2, dash='dash')))
+    
+    df_overall_prev = df_prev[df_prev['Channel'] == 'Overall'].sort_values('Date')
+    if not df_overall_prev.empty:
+        fig.add_trace(go.Scatter(x=df_overall_prev['Date'].dt.month, y=df_overall_prev['Value'], name=f'Overall ({year-1})', mode='lines', line=dict(color=colors[0], width=2, dash='dash'), opacity=0.8))
+
+    df_overall_curr = df_curr[df_curr['Channel'] == 'Overall'].sort_values('Date')
+    if not df_overall_curr.empty:
+        fig.add_trace(go.Scatter(x=df_overall_curr['Date'].dt.month, y=df_overall_curr['Value'], name=f'Overall ({year})', mode='lines+markers', line=dict(color=colors[0], width=4), fill='tonexty', fillcolor='rgba(111,143,232,0.1)'))
+
+    for i, channel in enumerate(sorted([c for c in df_curr['Channel'].unique() if c != 'Overall'])):
+        df_ch = df_curr[df_curr['Channel'] == channel].sort_values('Date')
+        fig.add_trace(go.Scatter(x=df_ch['Date'].dt.month, y=df_ch['Value'], name=channel, mode='lines', line=dict(color=colors[i+1], width=1.5), opacity=0.7))
+
+    goal_map = {"Overall Return Rate (%)": 0.045, "First Contact Resolution (%)": 0.85, "Customer Satisfaction (CSAT)": 4.5}
+    if metric in goal_map:
+        fig.add_hline(y=goal_map[metric], line_dash="dot", annotation_text="Goal", annotation_position="bottom right", line_color="gray")
+
     yaxis_tickformat = '.1%' if '%' in metric else '.2f' if 'csat' in metric.lower() else ',.0f'
     fig.update_layout(template="plotly_dark", yaxis_tickformat=yaxis_tickformat, plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)', legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-                      xaxis=dict(tickmode='array', tickvals=list(range(1, 13)), ticktext=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']))
+                      xaxis=dict(tickmode='array', tickvals=list(range(1, 13)), ticktext=['J','F','M','A','M','J','J','A','S','O','N','D']), margin=dict(t=0))
     st.plotly_chart(fig, use_container_width=True)
 
-# --- MAIN APP LOGIC ---
-st.title("🤖 Quality Department KPI Dashboard")
+def render_insights_card(insights: List[str]):
+    st.subheader("💡 AI-Powered Insights")
+    container = st.container(border=True)
+    for insight in insights:
+        container.markdown(f"&bull; {insight}")
+
+# --- MAIN APP ---
+st.title("🚀 Business Quality Dashboard")
 df = load_and_transform_data()
 if df.empty: st.warning("Data could not be loaded."); st.stop()
 
-# --- SIDEBAR CONTROLS ---
+# --- SIDEBAR ---
 with st.sidebar:
     st.header("Dashboard Controls")
     dashboard_mode = st.radio("Choose View", ["Curated", "AI-Generated"], label_visibility="collapsed")
+    
     st.markdown("---")
     st.header("Filters")
-    selected_metric = st.selectbox("Select KPI", sorted(df['Metric'].unique()))
-    selected_year = st.selectbox("Select Year", sorted(df['Year'].unique(), reverse=True))
+    if dashboard_mode == "Curated":
+        selected_metric = st.selectbox("Select KPI to Analyze", sorted(df['Metric'].unique()))
+    selected_year = st.selectbox("Select Year", sorted(df['Year'].unique(), reverse=True), label_visibility="collapsed")
     st.markdown("---")
     
-    # --- AI Configuration Section ---
     if dashboard_mode == "AI-Generated":
-        st.header("AI Configuration")
-        model_choice = st.radio("Choose AI Model", ["GPT-4o", "Claude 3.5 Sonnet"], horizontal=True)
-        
-        # Define the expected secret key name based on the model choice
-        secret_key_map = {"GPT-4o": "OPENAI_API_KEY", "Claude 3.5 Sonnet": "ANTHROPIC_API_KEY"}
-        secret_key_name = secret_key_map[model_choice]
-
-        # Check for the key in Streamlit's secrets and provide clear feedback
+        st.header("AI Analysis")
+        ai_metric = st.selectbox("Select KPI for AI Analysis", sorted(df['Metric'].unique()))
+        with st.expander("AI Model Configuration"):
+            model_choice = st.radio("Choose AI Model", ["GPT-4o", "Claude 3.5 Sonnet"], horizontal=True, label_visibility="collapsed")
+        secret_key_name = "OPENAI_API_KEY" if "GPT" in model_choice else "ANTHROPIC_API_KEY"
         api_key_to_use = st.secrets.get(secret_key_name)
-        if api_key_to_use:
-            st.success(f"✅ API key for {model_choice} found in secrets.")
-        else:
-            st.warning(f"⚠️ To use this model, please set `{secret_key_name}` in your Streamlit secrets.")
+        if not api_key_to_use: st.warning(f"Set `{secret_key_name}` in secrets to enable AI.")
 
-    st.markdown("---")
-    if st.button("🔄 Refresh Data"):
-        with st.spinner("Clearing cache..."): st.cache_data.clear()
-        st.rerun()
-    st.markdown("<div class='footer'><p>For questions, contact the <a href='mailto:your.email@example.com'>Quality Dept</a>.</p></div>", unsafe_allow_html=True)
+    st.markdown("<div class='footer'>Built for Business Owners</div>", unsafe_allow_html=True)
 
 # --- MAIN PANEL DISPLAY ---
 if dashboard_mode == "Curated":
-    render_kpi_summary(df, selected_metric, selected_year)
-    st.markdown("---")
-    render_line_chart(df, f"Performance Trends: {selected_year} vs. {selected_year - 1}", selected_metric, selected_year)
+    left_col, right_col = st.columns((2.5, 1))
+    with left_col:
+        render_line_chart(df, f"{selected_metric} Performance", selected_metric, selected_year)
+    with right_col:
+        render_kpi_details(df, selected_metric, selected_year)
+        with st.expander("Show Raw Data"):
+            st.dataframe(df[(df.Metric == selected_metric) & (df.Year == selected_year)], use_container_width=True)
 
 elif dashboard_mode == "AI-Generated":
-    st.header("AI-Generated Dashboard")
-    # Only proceed if the API key was successfully found in secrets
-    if api_key_to_use:
-        with st.spinner(f"🤖 Asking {model_choice} to design the dashboard..."):
-            data_summary = f"Metrics: {df['Metric'].unique().tolist()}. Years: {df['Year'].unique().tolist()}."
-            ai_layout = AIDashboardGenerator.get_ai_layout(data_summary, model_choice, api_key=api_key_to_use)
-            AIDashboardGenerator.render_dashboard(ai_layout, df)
+    if not api_key_to_use:
+        st.info("Please configure an AI API key in your Streamlit secrets to generate a report.")
     else:
-        st.info("Please configure the required API key in your Streamlit secrets to generate an AI dashboard.")
+        st.subheader(f"AI Analysis of: {ai_metric}")
+        with st.spinner(f"🚀 Asking {model_choice} to analyze {ai_metric}..."):
+            data_summary = AIDashboardGenerator.get_data_summary_for_ai(df, ai_metric, selected_year)
+            ai_response = AIDashboardGenerator.get_ai_layout(data_summary, ai_metric, model_choice, api_key=api_key_to_use)
+            
+            if "error" in ai_response:
+                st.error(f"AI Generation Failed: {ai_response['error']}")
+            else:
+                render_insights_card(ai_response.get("insights", ["The AI did not provide any insights."]))
+                st.markdown("---")
+                for component in ai_response.get("layout", []):
+                    params = component.get("params", {})
+                    if component.get("type") == "line_chart": render_line_chart(df, **params)
+                    elif component.get("type") == "kpi_summary": render_kpi_details(df, **params)
