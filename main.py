@@ -1,29 +1,3 @@
-Of course. This app has several issues, including a critical error that prevents it from running, fragile data parsing logic, and some UI/UX shortcomings.
-
-Here is a fixed and substantially improved version of your Streamlit dashboard code.
-
-### Key Improvements and Fixes:
-
-1.  **Critical Bug Fix:** The app would crash because the function `AIDashboardGenerator.get_available_models()` was called but never defined. It has been implemented to correctly check for available AI libraries and their corresponding API keys in `st.secrets`.
-2.  **Robust Data Parsing:** The original `load_and_transform_data` function was very brittle and hard to read.
-      * It's been refactored with clear constants for column indices, making the logic easier to follow.
-      * The parsing loop is now better structured with more descriptive comments and conditions, making it more resilient to minor changes in the sheet.
-      * Error handling is more specific.
-3.  **Corrected KPI Metrics:** Fixed a bug in the `render_kpi_summary` function where Year-over-Year (YoY) percentage point changes were being incorrectly formatted (e.g., a 2% point change was displayed as `200%`). The formatting is now accurate.
-4.  **Enhanced UI & UX:**
-      * The KPI summary cards now display in a responsive grid that prevents them from becoming too narrow on wide screens.
-      * The line charts now include annotations that highlight the most recent data point for both the current and previous year, making trends easier to spot.
-      * Added a spinner to the sidebar to provide feedback to the user while data is being refreshed.
-5.  **AI Integration Refinements:**
-      * The `AIDashboardGenerator` now uses a more robust method to handle responses from different AI models.
-      * Prompts are clearer, and error messages returned to the user are more informative.
-6.  **Code Quality:** The entire script has been updated with modern Python practices, including **type hints**, clearer **docstrings**, and better overall organization to improve maintainability and readability.
-
------
-
-### Revised Code
-
-````python
 # main.py
 import streamlit as st
 import pandas as pd
@@ -116,6 +90,7 @@ def load_and_transform_data() -> pd.DataFrame:
         COL_MONTHS_START = 5  # Column F
 
         conn = st.connection("gsheets", type=GSheetsConnection)
+        # Ensure your worksheet is named "Data" or change the string below
         raw_data = conn.read(worksheet="Data", header=None).fillna('').astype(str)
 
         all_metrics_data = []
@@ -330,7 +305,7 @@ def render_kpi_summary(df: pd.DataFrame, metric: str, year: int):
         yoy_change = latest_data['YoY Change']
         delta_display = "No prior year data"
         if pd.notna(yoy_change):
-            # FIX: Display as a percentage point change, not a multiplier.
+            # Display as a percentage point change, not a multiplier.
             delta_format = "{:+.2f} pts" if is_percent else ("${:,.2f}" if is_currency else "{:+.0f}")
             delta_display = f"{delta_format.format(yoy_change)} vs. prior year"
 
@@ -450,4 +425,3 @@ elif dashboard_mode == "AI-Generated View":
             data_summary = f"Available Metrics: {df['Metric'].unique().tolist()}. Available Years: {df['Year'].unique().tolist()}."
             ai_layout = AIDashboardGenerator.get_ai_layout(data_summary, model_choice)
             AIDashboardGenerator.render_dashboard(ai_layout, df)
-````
