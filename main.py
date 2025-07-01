@@ -1,4 +1,3 @@
-# main.py
 import streamlit as st
 import pandas as pd
 import plotly.express as px
@@ -10,12 +9,26 @@ import re
 import io
 import time
 
+try:
+    from scipy import stats
+    SCIPY_AVAILABLE = True
+except ImportError:
+    SCIPY_AVAILABLE = False
+
 # --- Dependency Checks ---
 try:
     import openai
+    from openai import AuthenticationError, RateLimitError
     OPENAI_AVAILABLE = True
 except ImportError:
     OPENAI_AVAILABLE = False
+    
+    # Create dummy classes to prevent errors
+    class AuthenticationError(Exception):
+        pass
+    
+    class RateLimitError(Exception):
+        pass
 
 try:
     import anthropic
@@ -185,29 +198,19 @@ class AIQualityAnalyzer:
     
     def generate_insights_with_ai(self, metrics_summary: Dict) -> Dict[str, List[str]]:
         """Generate insights using available AI"""
-        insights = {
-            "key_findings": [],
-            "actions": [],
-            "warnings": []
-        }
-        
-        # Analyze metrics locally first
-        local_insights = self._analyze_metrics_locally(metrics_summary)
-        
-        # Try AI enhancement if available
+        # First try AI providers
         if self.anthropic_available:
             ai_insights = self._get_claude_insights(metrics_summary)
             if ai_insights:
-                insights = ai_insights
-        elif self.openai_available:
+                return ai_insights
+        
+        if self.openai_available:
             ai_insights = self._get_openai_insights(metrics_summary)
             if ai_insights:
-                insights = ai_insights
-        else:
-            # Use local analysis
-            insights = local_insights
+                return ai_insights
         
-        return insights
+        # Fall back to local analysis
+        return self._analyze_metrics_locally(metrics_summary)
     
     def _analyze_metrics_locally(self, metrics_summary: Dict) -> Dict[str, List[str]]:
         """Analyze metrics without AI"""
@@ -222,11 +225,32 @@ class AIQualityAnalyzer:
             return_data = metrics_summary['Overall Return Rate']
             current_rate = return_data['current_value']
             yoy_change = return_data.get('yoy_change', 0)
+            trend = return_data.get('trend')
             
-            if current_rate > 0.10:  # Above 10%
-                insights["warnings"].append(f"Return rate is high at {current_rate:.1%} - investigate quality issues")
-            elif yoy_change and yoy_change < -0.1:  # Improved by more than 10%
-                insights["key_findings"].append(f"Return rate improved by {abs(yoy_change):.1%} YoY - quality initiatives working")
+            # Key findings based on actual values
+            if current_rate < 0.05:  # Below 5%
+                insights["key_findings"].append(f"Excellent return rate at {current_rate:.1%} - well below industry average of 8-10%")
+            elif current_rate > 0.10:  # Above 10%
+                insights["warnings"].append(f"High return rate at {current_rate:.1%} - exceeds 10% threshold")
+                insights["actions"].append("Conduct root cause analysis on returns - focus on top return reasons")
+            else:
+                insights["key_findings"].append(f"Return rate at {current_rate:.1%} is within acceptable range (5-10%)")
+            
+            # YoY comparison - be very specific about the change
+            if yoy_change is not None:
+                # For return rate, positive change means it got worse
+                if yoy_change > 0:
+                    change_text = f"increased by {yoy_change:.1%}"
+                    if yoy_change > 0.2:  # More than 20% increase
+                        insights["warnings"].append(f"Return rate {change_text} YoY - significant quality decline")
+                    else:
+                        insights["warnings"].append(f"Return rate {change_text} YoY - monitor for continued increases")
+                else:
+                    change_text = f"decreased by {abs(yoy_change):.1%}"
+                    if yoy_change < -0.1:  # More than 10% decrease
+                        insights["key_findings"].append(f"Return rate {change_text} YoY - quality improvements are working")
+                    else:
+                        insights["key_findings"].append(f"Return rate {change_text} YoY - positive trend")
         
         # Analyze inspection coverage
         if 'Percent Order Inspected' in metrics_summary:
@@ -234,7 +258,9 @@ class AIQualityAnalyzer:
             coverage = inspection_data['current_value']
             
             if coverage < 0.80:
-                insights["actions"].append(f"Increase inspection coverage from {coverage:.1%} to at least 85%")
+                insights["actions"].append(f"Inspection coverage at {coverage:.1%} - increase to 85%+ for better quality control")
+            elif coverage > 0.95:
+                insights["key_findings"].append(f"Excellent inspection coverage at {coverage:.1%}")
             
         # Analyze costs
         if 'Average Cost per Inspection' in metrics_summary:
@@ -242,13 +268,25 @@ class AIQualityAnalyzer:
             current_cost = cost_data['current_value']
             yoy_change = cost_data.get('yoy_change', 0)
             
+            if current_cost > 30:
+                insights["warnings"].append(f"Inspection cost at ${current_cost:.2f} is high - review process efficiency")
+            
             if yoy_change and yoy_change > 0.15:  # Increased by more than 15%
-                insights["warnings"].append(f"Inspection costs up {yoy_change:.1%} YoY - review efficiency")
+                insights["actions"].append(f"Inspection costs up {yoy_change:.1%} YoY - optimize inspection process")
         
-        # Add general insights if none found
-        if not any(insights.values()):
-            insights["key_findings"].append("Quality metrics are stable - maintain current processes")
-            insights["actions"].append("Continue monitoring for trend changes")
+        # Analyze order volume
+        if 'Total Orders' in metrics_summary:
+            orders_data = metrics_summary['Total Orders']
+            yoy_change = orders_data.get('yoy_change', 0)
+            
+            if yoy_change and yoy_change < -0.2:  # Decreased by more than 20%
+                insights["warnings"].append(f"Order volume down {abs(yoy_change):.1%} YoY - may impact quality metrics")
+        
+        # Ensure we always have some insights
+        if not insights["key_findings"]:
+            insights["key_findings"].append("Quality metrics are within normal ranges")
+        if not insights["actions"]:
+            insights["actions"].append("Continue monitoring quality metrics for trends")
         
         return insights
     
@@ -310,11 +348,18 @@ class AIQualityAnalyzer:
                 model="gpt-3.5-turbo",
                 messages=[{"role": "user", "content": prompt}],
                 response_format={"type": "json_object"},
-                temperature=0.7
+                temperature=0.7,
+                max_tokens=1000
             )
             return json.loads(response.choices[0].message.content)
+        except AuthenticationError:
+            st.warning("OpenAI API key is invalid or expired")
+            return None
+        except RateLimitError:
+            st.warning("OpenAI API rate limit reached")
+            return None
         except Exception as e:
-            st.warning(f"OpenAI analysis error: {str(e)}")
+            st.warning(f"OpenAI error: {str(e)}")
             return None
 
 # --- DATA PROCESSING ---
@@ -376,19 +421,45 @@ def calculate_summary_metrics(df: pd.DataFrame) -> Dict:
             if not prev_year.empty:
                 yoy_change = (latest_row['Value'] - prev_year.iloc[0]['Value']) / prev_year.iloc[0]['Value']
             
-            # Calculate trend
-            recent_data = metric_data.nlargest(6, 'Date')
+            # Calculate trend based on last 6 months
+            recent_data = metric_data.nlargest(6, 'Date').sort_values('Date')
             if len(recent_data) >= 2:
-                trend = 'up' if recent_data.iloc[0]['Value'] > recent_data.iloc[-1]['Value'] else 'down'
+                if SCIPY_AVAILABLE:
+                    # Use linear regression to determine trend
+                    x = range(len(recent_data))
+                    y = recent_data['Value'].values
+                    slope, _, _, _, _ = stats.linregress(x, y)
+                    
+                    # Determine if trend is significant
+                    avg_value = recent_data['Value'].mean()
+                    if abs(slope) < (avg_value * 0.01):  # Less than 1% change per month
+                        trend = 'stable'
+                    elif slope > 0:
+                        trend = 'up'
+                    else:
+                        trend = 'down'
+                else:
+                    # Simple trend calculation without scipy
+                    first_half_avg = recent_data.iloc[:3]['Value'].mean()
+                    second_half_avg = recent_data.iloc[3:]['Value'].mean()
+                    if abs(second_half_avg - first_half_avg) < (first_half_avg * 0.05):
+                        trend = 'stable'
+                    elif second_half_avg > first_half_avg:
+                        trend = 'up'
+                    else:
+                        trend = 'down'
             else:
                 trend = 'neutral'
             
             summary[metric] = {
                 'current_value': float(latest_row['Value']),
+                'previous_year_value': float(prev_year.iloc[0]['Value']) if not prev_year.empty else None,
                 'yoy_change': float(yoy_change) if yoy_change is not None else None,
                 'mom_change': float(latest_row['MoM_Change']) if pd.notna(latest_row['MoM_Change']) else None,
                 'trend': trend,
-                '3_month_avg': float(metric_data.nlargest(3, 'Date')['Value'].mean())
+                '3_month_avg': float(metric_data.nlargest(3, 'Date')['Value'].mean()),
+                'min_12mo': float(metric_data.nlargest(12, 'Date')['Value'].min()) if len(metric_data) >= 12 else float(metric_data['Value'].min()),
+                'max_12mo': float(metric_data.nlargest(12, 'Date')['Value'].max()) if len(metric_data) >= 12 else float(metric_data['Value'].max())
             }
     
     return summary
@@ -448,9 +519,28 @@ def create_metric_dashboard(df: pd.DataFrame, metrics_summary: Dict) -> None:
                     lower_is_better = any(term in metric.lower() for term in ['cost', 'return', 'defect', 'rework', 'rate'])
                     
                     if yoy is not None:
-                        is_good = (yoy < 0 and lower_is_better) or (yoy > 0 and not lower_is_better)
-                        delta = f"{'↑' if yoy > 0 else '↓'} {abs(yoy):.1%} YoY"
-                        delta_color = "normal" if is_good else "inverse"
+                        # Show change with clear direction
+                        if yoy > 0:
+                            delta = f"↑ {yoy:.1%} YoY"
+                        elif yoy < 0:
+                            delta = f"↓ {abs(yoy):.1%} YoY"
+                        else:
+                            delta = "No change YoY"
+                        
+                        # Streamlit's delta_color logic:
+                        # "normal" = green for positive delta, red for negative delta
+                        # "inverse" = red for positive delta, green for negative delta
+                        # "off" = gray (no color)
+                        
+                        # For metrics where lower is better (return rate, costs):
+                        # - Positive YoY (increase) is bad → show red → use "inverse"
+                        # - Negative YoY (decrease) is good → show green → use "inverse"
+                        
+                        # For metrics where higher is better (orders, coverage):
+                        # - Positive YoY (increase) is good → show green → use "normal"
+                        # - Negative YoY (decrease) is bad → show red → use "normal"
+                        
+                        delta_color = "inverse" if lower_is_better else "normal"
                     else:
                         delta = "No YoY data"
                         delta_color = "off"
@@ -464,60 +554,119 @@ def create_metric_dashboard(df: pd.DataFrame, metrics_summary: Dict) -> None:
                     )
                     
                     # Add mini chart
-                    metric_data = df[df['Metric'] == metric].tail(12)
+                    metric_data = df[df['Metric'] == metric].sort_values('Date').tail(12)
                     
                     if len(metric_data) > 1:
+                        # Create a simple line chart for clearer trend visualization
                         fig = go.Figure()
+                        
+                        # Determine metric type for formatting
+                        is_percent = any(term in metric.lower() for term in ['rate', 'percent', '%'])
+                        is_currency = any(term in metric.lower() for term in ['cost', '$'])
                         
                         # Determine if metric should decrease (lower is better)
                         lower_is_better = any(term in metric.lower() for term in ['cost', 'return', 'defect', 'rework', 'rate'])
                         
-                        # Set color based on trend
-                        if len(metric_data) >= 2:
-                            if lower_is_better:
-                                color = '#ef4444' if metric_data.iloc[-1]['Value'] > metric_data.iloc[0]['Value'] else '#10b981'
-                            else:
-                                color = '#10b981' if metric_data.iloc[-1]['Value'] > metric_data.iloc[0]['Value'] else '#ef4444'
-                        else:
-                            color = '#3b82f6'
+                        # Calculate overall trend
+                        first_val = metric_data.iloc[0]['Value']
+                        last_val = metric_data.iloc[-1]['Value']
+                        overall_change = ((last_val - first_val) / first_val) * 100 if first_val != 0 else 0
                         
+                        # Determine line color based on overall trend
+                        if abs(overall_change) < 2:  # Less than 2% change
+                            line_color = '#64748b'  # Gray - stable
+                        elif lower_is_better:
+                            line_color = '#10b981' if overall_change < 0 else '#ef4444'
+                        else:
+                            line_color = '#10b981' if overall_change > 0 else '#ef4444'
+                        
+                        # Create line chart
                         fig.add_trace(go.Scatter(
                             x=metric_data['Date'],
                             y=metric_data['Value'],
-                            mode='lines',
-                            line=dict(color=color, width=3),
+                            mode='lines+markers',
+                            line=dict(color=line_color, width=2),
+                            marker=dict(size=4, color=line_color),
                             fill='tozeroy',
-                            fillcolor=f'rgba({int(color[1:3], 16)}, {int(color[3:5], 16)}, {int(color[5:7], 16)}, 0.1)',
-                            showlegend=False
+                            fillcolor=f'rgba({int(line_color[1:3], 16)}, {int(line_color[3:5], 16)}, {int(line_color[5:7], 16)}, 0.1)',
+                            showlegend=False,
+                            hovertemplate=(
+                                ('%{y:.1%}' if is_percent else '$%{y:.0f}' if is_currency else '%{y:.0f}') +
+                                '<br>%{x|%b %Y}<extra></extra>'
+                            )
                         ))
                         
-                        # Add min/max points
-                        min_point = metric_data.loc[metric_data['Value'].idxmin()]
-                        max_point = metric_data.loc[metric_data['Value'].idxmax()]
+                        # Add average line
+                        avg_value = metric_data['Value'].mean()
+                        fig.add_hline(
+                            y=avg_value,
+                            line_dash="dot",
+                            line_color="#cbd5e1",
+                            line_width=1
+                        )
                         
-                        fig.add_trace(go.Scatter(
-                            x=[min_point['Date'], max_point['Date']],
-                            y=[min_point['Value'], max_point['Value']],
-                            mode='markers',
-                            marker=dict(
-                                size=6,
-                                color=['#ef4444', '#10b981'] if lower_is_better else ['#10b981', '#ef4444']
-                            ),
-                            showlegend=False
-                        ))
-                        
+                        # Update layout
                         fig.update_layout(
-                            height=120,
-                            margin=dict(l=0, r=0, t=10, b=0),
-                            xaxis=dict(visible=False, fixedrange=True),
-                            yaxis=dict(visible=False, fixedrange=True),
+                            height=90,
+                            margin=dict(l=0, r=0, t=5, b=0),
+                            xaxis=dict(
+                                visible=False,
+                                fixedrange=True
+                            ),
+                            yaxis=dict(
+                                visible=False,
+                                fixedrange=True,
+                                range=[
+                                    metric_data['Value'].min() * 0.98,
+                                    metric_data['Value'].max() * 1.02
+                                ]
+                            ),
                             paper_bgcolor='rgba(0,0,0,0)',
                             plot_bgcolor='rgba(0,0,0,0)',
                             dragmode=False,
-                            hovermode=False
+                            hovermode='x'
                         )
                         
-                        st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False})
+                        st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False}, key=f"chart_{metric}")
+                        
+                        # Add clear trend summary
+                        if is_percent:
+                            value_context = f"{first_val:.1%} → {last_val:.1%}"
+                        elif is_currency:
+                            value_context = f"${first_val:.0f} → ${last_val:.0f}"
+                        else:
+                            value_context = f"{first_val:.0f} → {last_val:.0f}"
+                        
+                        # Simple, clear trend indicator
+                        if abs(overall_change) < 2:
+                            trend_text = "Stable"
+                            trend_color = "#64748b"
+                        else:
+                            if lower_is_better:
+                                if overall_change < 0:
+                                    trend_text = f"↓ {abs(overall_change):.0f}% (improving)"
+                                    trend_color = "#10b981"
+                                else:
+                                    trend_text = f"↑ {overall_change:.0f}% (worsening)"
+                                    trend_color = "#ef4444"
+                            else:
+                                if overall_change > 0:
+                                    trend_text = f"↑ {overall_change:.0f}% (improving)"
+                                    trend_color = "#10b981"
+                                else:
+                                    trend_text = f"↓ {abs(overall_change):.0f}% (worsening)"
+                                    trend_color = "#ef4444"
+                        
+                        st.markdown(f"""
+                            <div style="text-align: center; margin-top: -0.5rem;">
+                                <p style="color: {trend_color}; font-size: 0.75rem; font-weight: 600; margin: 0;">
+                                    {trend_text}
+                                </p>
+                                <p style="color: #94a3b8; font-size: 0.7rem; margin: 0;">
+                                    {value_context}
+                                </p>
+                            </div>
+                        """, unsafe_allow_html=True)
 
 def create_main_chart(df: pd.DataFrame, metric: str, chart_type: str = "trend") -> go.Figure:
     """Create main analysis chart"""
@@ -648,6 +797,16 @@ def main():
     openai_key = st.secrets.get("OPENAI_API_KEY", "")
     anthropic_key = st.secrets.get("ANTHROPIC_API_KEY", "")
     
+    # Debug mode - can be enabled via query params
+    debug_mode = False
+    try:
+        debug_mode = st.experimental_get_query_params().get("debug", ["false"])[0].lower() == "true"
+    except:
+        pass
+    
+    if debug_mode:
+        st.info(f"Debug Mode Active | OpenAI: {'✓' if openai_key else '✗'} | Anthropic: {'✓' if anthropic_key else '✗'}")
+    
     # Sidebar
     with st.sidebar:
         st.markdown("""
@@ -691,6 +850,10 @@ def main():
                 <li>Executive summary</li>
             </ul>
         """, unsafe_allow_html=True)
+        
+        # Add tip about debug mode
+        with st.expander("🛠️ Troubleshooting"):
+            st.caption("Add ?debug=true to URL for debug info")
     
     # Initialize analyzer
     analyzer = AIQualityAnalyzer(openai_key, anthropic_key)
@@ -746,6 +909,20 @@ def main():
     
     # Display insights
     st.markdown("## 💡 Intelligent Insights")
+    
+    # Show debug info if enabled
+    if debug_mode and 'Overall Return Rate' in metrics_summary:
+        with st.expander("Debug Information"):
+            return_data = metrics_summary['Overall Return Rate']
+            prev_year = return_data.get('previous_year_value')
+            st.code(f"""
+Return Rate Analysis:
+- Current Value: {return_data['current_value']:.3%}
+- Previous Year: {f"{prev_year:.3%}" if prev_year is not None else 'N/A'}
+- YoY Change: {f"{return_data.get('yoy_change', 0):.3%}" if return_data.get('yoy_change') is not None else 'N/A'}
+- Trend: {return_data.get('trend', 'N/A')}
+- 3-Month Avg: {return_data.get('3_month_avg', 0):.3%}
+            """)
     
     with st.spinner("🤖 Analyzing quality metrics..."):
         insights = analyzer.generate_insights_with_ai(metrics_summary)
