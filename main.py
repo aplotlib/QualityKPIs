@@ -1,3 +1,4 @@
+# main.py
 import streamlit as st
 import pandas as pd
 import plotly.express as px
@@ -198,19 +199,33 @@ class AIQualityAnalyzer:
     
     def generate_insights_with_ai(self, metrics_summary: Dict) -> Dict[str, List[str]]:
         """Generate insights using available AI"""
+        # Clean metrics summary to ensure JSON serialization works
+        clean_summary = {}
+        for metric, data in metrics_summary.items():
+            clean_data = {}
+            for key, value in data.items():
+                if isinstance(value, (int, float)):
+                    if pd.isna(value) or (isinstance(value, float) and not np.isfinite(value)):
+                        clean_data[key] = None
+                    else:
+                        clean_data[key] = round(float(value), 4)  # Round to 4 decimal places
+                else:
+                    clean_data[key] = value
+            clean_summary[metric] = clean_data
+        
         # First try AI providers
         if self.anthropic_available:
-            ai_insights = self._get_claude_insights(metrics_summary)
+            ai_insights = self._get_claude_insights(clean_summary)
             if ai_insights:
                 return ai_insights
         
         if self.openai_available:
-            ai_insights = self._get_openai_insights(metrics_summary)
+            ai_insights = self._get_openai_insights(clean_summary)
             if ai_insights:
                 return ai_insights
         
         # Fall back to local analysis
-        return self._analyze_metrics_locally(metrics_summary)
+        return self._analyze_metrics_locally(clean_summary)
     
     def _analyze_metrics_locally(self, metrics_summary: Dict) -> Dict[str, List[str]]:
         """Analyze metrics without AI"""
@@ -305,7 +320,12 @@ class AIQualityAnalyzer:
         2. 2-3 specific actions to improve
         3. 1-2 warnings about risks or concerning trends
         
-        Format as JSON with keys: "key_findings", "actions", "warnings" (each containing a list of strings)
+        Return ONLY a valid JSON object with this exact structure:
+        {{
+            "key_findings": ["finding 1", "finding 2"],
+            "actions": ["action 1", "action 2"],
+            "warnings": ["warning 1"]
+        }}
         """
         
         try:
@@ -317,12 +337,42 @@ class AIQualityAnalyzer:
             )
             
             content = response.content[0].text
-            json_match = re.search(r'\{.*\}', content, re.DOTALL)
+            
+            # Try to extract JSON from the response
+            # First, try to find a JSON object in the response
+            json_match = re.search(r'\{[^{}]*\{[^{}]*\}[^{}]*\}|\{[^{}]*\}', content, re.DOTALL)
+            
             if json_match:
-                return json.loads(json_match.group())
-            return None
+                try:
+                    json_str = json_match.group()
+                    # Clean up common issues
+                    json_str = json_str.replace('\n', ' ').replace('\r', ' ')
+                    # Remove trailing commas before closing brackets
+                    json_str = re.sub(r',\s*}', '}', json_str)
+                    json_str = re.sub(r',\s*]', ']', json_str)
+                    
+                    result = json.loads(json_str)
+                    
+                    # Validate structure
+                    if isinstance(result, dict) and all(key in result for key in ["key_findings", "actions", "warnings"]):
+                        # Ensure all values are lists
+                        for key in ["key_findings", "actions", "warnings"]:
+                            if not isinstance(result[key], list):
+                                result[key] = [str(result[key])] if result[key] else []
+                        return result
+                    else:
+                        # If structure is wrong, return None to trigger local analysis
+                        return None
+                        
+                except json.JSONDecodeError as e:
+                    st.warning(f"Claude JSON parsing error: {str(e)}")
+                    return None
+            else:
+                # No JSON found in response
+                return None
+                
         except Exception as e:
-            st.warning(f"Claude analysis error: {str(e)}")
+            st.warning(f"Claude API error: {str(e)}")
             return None
     
     def _get_openai_insights(self, metrics_summary: Dict) -> Optional[Dict[str, List[str]]]:
@@ -340,7 +390,7 @@ class AIQualityAnalyzer:
         2. 2-3 actions to improve
         3. 1-2 warnings about risks
         
-        Return JSON with keys: "key_findings", "actions", "warnings"
+        Return a JSON object with keys: "key_findings", "actions", "warnings" (each containing a list of strings)
         """
         
         try:
@@ -351,12 +401,27 @@ class AIQualityAnalyzer:
                 temperature=0.7,
                 max_tokens=1000
             )
-            return json.loads(response.choices[0].message.content)
+            
+            result = json.loads(response.choices[0].message.content)
+            
+            # Validate structure
+            if isinstance(result, dict) and all(key in result for key in ["key_findings", "actions", "warnings"]):
+                # Ensure all values are lists
+                for key in ["key_findings", "actions", "warnings"]:
+                    if not isinstance(result[key], list):
+                        result[key] = [str(result[key])] if result[key] else []
+                return result
+            else:
+                return None
+                
         except AuthenticationError:
             st.warning("OpenAI API key is invalid or expired")
             return None
         except RateLimitError:
             st.warning("OpenAI API rate limit reached")
+            return None
+        except json.JSONDecodeError as e:
+            st.warning(f"OpenAI JSON parsing error: {str(e)}")
             return None
         except Exception as e:
             st.warning(f"OpenAI error: {str(e)}")
@@ -800,7 +865,7 @@ def main():
     # Debug mode - can be enabled via query params
     debug_mode = False
     try:
-        debug_mode = st.experimental_get_query_params().get("debug", ["false"])[0].lower() == "true"
+        debug_mode = st.query_params.get("debug", "false").lower() == "true"
     except:
         pass
     
@@ -923,6 +988,10 @@ Return Rate Analysis:
 - Trend: {return_data.get('trend', 'N/A')}
 - 3-Month Avg: {return_data.get('3_month_avg', 0):.3%}
             """)
+            
+            # Show JSON that will be sent to AI
+            if st.checkbox("Show AI Input Data"):
+                st.json(metrics_summary)
     
     with st.spinner("🤖 Analyzing quality metrics..."):
         insights = analyzer.generate_insights_with_ai(metrics_summary)
