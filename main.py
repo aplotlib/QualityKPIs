@@ -268,9 +268,32 @@ def prepare_data(df: pd.DataFrame) -> pd.DataFrame:
     
     # Add trend indicator (based on 3-month moving average)
     df['MA3'] = df.groupby('Metric')['Value'].transform(lambda x: x.rolling(3, min_periods=1).mean())
-    df['Trend'] = df.groupby('Metric')['MA3'].transform(
-        lambda x: 'Improving' if x.iloc[-1] < x.iloc[-3] if len(x) >= 3 else x.iloc[-1] < x.iloc[0] else 'Worsening'
-    )
+    
+    # Determine trend based on metric type
+    def calculate_trend(x, metric_name):
+        if len(x) < 2:
+            return 'Insufficient Data'
+        
+        # Determine if lower is better
+        lower_is_better = any(term in metric_name.lower() for term in ['cost', 'return', 'defect', 'rework', 'rate'])
+        
+        # Compare recent vs older values
+        if len(x) >= 3:
+            recent = x.iloc[-1]
+            older = x.iloc[-3]
+        else:
+            recent = x.iloc[-1]
+            older = x.iloc[0]
+        
+        if lower_is_better:
+            return 'Improving' if recent < older else 'Worsening'
+        else:
+            return 'Improving' if recent > older else 'Worsening'
+    
+    # Apply trend calculation
+    for metric in df['Metric'].unique():
+        mask = df['Metric'] == metric
+        df.loc[mask, 'Trend'] = calculate_trend(df.loc[mask, 'MA3'], metric)
     
     return df
 
