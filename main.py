@@ -6,6 +6,7 @@ import plotly.graph_objects as go
 import json
 from typing import List, Dict, Optional
 import numpy as np
+import re
 
 # --- Dependency Checks ---
 try:
@@ -13,7 +14,12 @@ try:
     OPENAI_AVAILABLE = True
 except ImportError:
     OPENAI_AVAILABLE = False
-    st.error("Please install openai: pip install openai")
+
+try:
+    import anthropic
+    ANTHROPIC_AVAILABLE = True
+except ImportError:
+    ANTHROPIC_AVAILABLE = False
 
 # --- PAGE CONFIGURATION ---
 st.set_page_config(
@@ -55,10 +61,15 @@ st.markdown("""
 
 # --- AI PROCESSOR ---
 class AIQualityAnalyzer:
-    def __init__(self, api_key: str):
-        if not OPENAI_AVAILABLE:
-            raise ImportError("OpenAI library not available")
-        self.client = openai.OpenAI(api_key=api_key)
+    def __init__(self, api_key: str, provider: str = "openai"):
+        self.provider = provider
+        
+        if provider == "openai" and OPENAI_AVAILABLE:
+            self.client = openai.OpenAI(api_key=api_key)
+        elif provider == "anthropic" and ANTHROPIC_AVAILABLE:
+            self.client = anthropic.Anthropic(api_key=api_key)
+        else:
+            raise ImportError(f"{provider} library not available")
     
     def parse_quality_data(self, file_content: str) -> pd.DataFrame:
         """Parse CSV content and return structured DataFrame"""
@@ -91,14 +102,33 @@ class AIQualityAnalyzer:
         """
         
         try:
-            response = self.client.chat.completions.create(
-                model="gpt-4o-mini",
-                messages=[{"role": "user", "content": prompt}],
-                response_format={"type": "json_object"},
-                temperature=0.7
-            )
-            result = json.loads(response.choices[0].message.content)
-            return result.get("insights", ["Unable to generate insights"])
+            if self.provider == "openai":
+                response = self.client.chat.completions.create(
+                    model="gpt-4o-mini",
+                    messages=[{"role": "user", "content": prompt}],
+                    response_format={"type": "json_object"},
+                    temperature=0.7
+                )
+                result = json.loads(response.choices[0].message.content)
+                return result.get("insights", ["Unable to generate insights"])
+                
+            elif self.provider == "anthropic":
+                response = self.client.messages.create(
+                    model="claude-3-haiku-20240307",
+                    messages=[{"role": "user", "content": prompt + "\n\nPlease respond with a valid JSON object."}],
+                    max_tokens=1000,
+                    temperature=0.7
+                )
+                # Extract JSON from Claude's response
+                content = response.content[0].text
+                # Try to find JSON in the response
+                json_match = re.search(r'\{.*\}', content, re.DOTALL)
+                if json_match:
+                    result = json.loads(json_match.group())
+                    return result.get("insights", ["Unable to parse insights"])
+                else:
+                    return ["Unable to parse AI response"]
+                    
         except Exception as e:
             return [f"AI insight generation failed: {str(e)}"]
     
@@ -283,14 +313,39 @@ def main():
     st.title("🧠 AI-Powered Quality Dashboard")
     st.markdown("Intelligent analysis of quality metrics with automatic insights")
     
-    # Check for API key
-    api_key = st.secrets.get("OPENAI_API_KEY", "")
-    if not api_key:
-        st.error("Please add your OpenAI API key to Streamlit secrets")
+    # Check for available API keys
+    available_providers = []
+    
+    if OPENAI_AVAILABLE and st.secrets.get("OPENAI_API_KEY", ""):
+        available_providers.append(("OpenAI (GPT-4)", "openai", st.secrets["OPENAI_API_KEY"]))
+    
+    if ANTHROPIC_AVAILABLE and st.secrets.get("ANTHROPIC_API_KEY", ""):
+        available_providers.append(("Anthropic (Claude)", "anthropic", st.secrets["ANTHROPIC_API_KEY"]))
+    
+    if not available_providers:
+        st.error("No AI API keys found in Streamlit secrets. Please add OPENAI_API_KEY or ANTHROPIC_API_KEY.")
         st.stop()
     
+    # AI Provider selection in sidebar
+    with st.sidebar:
+        st.markdown("### 🤖 AI Settings")
+        
+        if len(available_providers) > 1:
+            provider_names = [p[0] for p in available_providers]
+            selected_provider_idx = st.selectbox(
+                "Select AI Provider:",
+                range(len(provider_names)),
+                format_func=lambda x: provider_names[x]
+            )
+            provider_name, provider_type, api_key = available_providers[selected_provider_idx]
+        else:
+            provider_name, provider_type, api_key = available_providers[0]
+            st.info(f"Using {provider_name}")
+        
+        st.markdown("---")
+    
     # Initialize AI analyzer
-    analyzer = AIQualityAnalyzer(api_key)
+    analyzer = AIQualityAnalyzer(api_key, provider_type)
     
     # Load data
     try:
