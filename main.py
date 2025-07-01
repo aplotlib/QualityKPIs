@@ -24,8 +24,8 @@ except ImportError:
 
 # --- PAGE CONFIGURATION ---
 st.set_page_config(
-    page_title="AI-Powered Quality Dashboard",
-    page_icon="🧠",
+    page_title="Quality Intelligence Dashboard",
+    page_icon="📊",
     layout="wide",
 )
 
@@ -35,43 +35,45 @@ st.markdown("""
     @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap');
     html, body, [class*="st-"] { font-family: 'Inter', sans-serif; }
     .main .block-container { padding: 2rem; }
-    h1 { text-align: center; font-weight: 700; color: #1f2937; }
-    h2, h3 { font-weight: 600; color: #374151; }
+    h1 { text-align: center; font-weight: 700; }
     .metric-card {
-        background: linear-gradient(135deg, #f3f4f6 0%, #e5e7eb 100%);
+        background: white;
         border-radius: 12px;
         padding: 1.5rem;
         box-shadow: 0 2px 8px rgba(0,0,0,0.08);
-        margin-bottom: 1rem;
+        border: 1px solid #e5e7eb;
+        height: 100%;
     }
-    .insight-box {
+    .insight-card {
+        background: #f0f9ff;
+        border-left: 4px solid #3b82f6;
+        padding: 1rem;
+        border-radius: 0 8px 8px 0;
+        margin: 0.5rem 0;
+    }
+    .action-card {
+        background: #f0fdf4;
+        border-left: 4px solid #10b981;
+        padding: 1rem;
+        border-radius: 0 8px 8px 0;
+        margin: 0.5rem 0;
+    }
+    .warning-card {
         background: #fef3c7;
         border-left: 4px solid #f59e0b;
         padding: 1rem;
         border-radius: 0 8px 8px 0;
-        margin: 1rem 0;
-    }
-    .ai-insight-box {
-        background: #e0e7ff;
-        border-left: 4px solid #6366f1;
-        padding: 1rem;
-        border-radius: 0 8px 8px 0;
         margin: 0.5rem 0;
-        font-size: 0.9rem;
     }
-    .synthesis-box {
-        background: #d1fae5;
-        border-left: 4px solid #10b981;
-        padding: 1.2rem;
-        border-radius: 0 8px 8px 0;
-        margin: 1rem 0;
-    }
-    .stMetric {
+    div[data-testid="metric-container"] {
         background-color: white;
-        padding: 1.5rem;
-        border-radius: 12px;
-        box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+        padding: 1rem;
+        border-radius: 8px;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.1);
     }
+    .trend-up { color: #10b981; }
+    .trend-down { color: #ef4444; }
+    .trend-neutral { color: #6b7280; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -80,181 +82,185 @@ class AIQualityAnalyzer:
     def __init__(self, openai_key: Optional[str] = None, anthropic_key: Optional[str] = None):
         self.openai_client = None
         self.anthropic_client = None
+        self.openai_available = False
+        self.anthropic_available = False
         
         if openai_key and OPENAI_AVAILABLE:
-            self.openai_client = openai.OpenAI(api_key=openai_key)
+            try:
+                self.openai_client = openai.OpenAI(api_key=openai_key)
+                self.openai_available = True
+            except Exception as e:
+                st.warning(f"OpenAI initialization failed: {str(e)}")
         
         if anthropic_key and ANTHROPIC_AVAILABLE:
-            self.anthropic_client = anthropic.Anthropic(api_key=anthropic_key)
+            try:
+                self.anthropic_client = anthropic.Anthropic(api_key=anthropic_key)
+                self.anthropic_available = True
+            except Exception as e:
+                st.warning(f"Anthropic initialization failed: {str(e)}")
     
     def parse_quality_data(self, file_content: str) -> pd.DataFrame:
         """Parse CSV content and return structured DataFrame"""
         try:
             df = pd.read_csv(io.StringIO(file_content))
-            
-            # Standardize column names
             df.columns = [col.capitalize() for col in df.columns]
-            
             return df
         except Exception as e:
             st.error(f"Error parsing data: {e}")
             return None
     
-    def get_openai_insights(self, metrics_summary: Dict) -> List[str]:
-        """Get insights from OpenAI"""
-        if not self.openai_client:
-            return []
+    def generate_insights_with_ai(self, metrics_summary: Dict) -> Dict[str, List[str]]:
+        """Generate insights using available AI"""
+        insights = {
+            "key_findings": [],
+            "actions": [],
+            "warnings": []
+        }
         
-        prompt = f"""
-        As a Quality Manager expert, analyze these quality metrics and provide 3-4 key insights:
+        # Analyze metrics locally first
+        local_insights = self._analyze_metrics_locally(metrics_summary)
         
-        {json.dumps(metrics_summary, indent=2)}
+        # Try AI enhancement if available
+        if self.anthropic_available:
+            ai_insights = self._get_claude_insights(metrics_summary)
+            if ai_insights:
+                insights = ai_insights
+        elif self.openai_available:
+            ai_insights = self._get_openai_insights(metrics_summary)
+            if ai_insights:
+                insights = ai_insights
+        else:
+            # Use local analysis
+            insights = local_insights
         
-        Focus on:
-        1. Most concerning trends
-        2. Improvements or deteriorations
-        3. Specific metrics that need attention
-        4. Actionable recommendations
-        
-        Be direct, specific, and data-driven. Format as a JSON object with key "insights" containing a list of strings.
-        """
-        
-        try:
-            response = self.openai_client.chat.completions.create(
-                model="gpt-4o-mini",
-                messages=[{"role": "user", "content": prompt}],
-                response_format={"type": "json_object"},
-                temperature=0.7
-            )
-            result = json.loads(response.choices[0].message.content)
-            return result.get("insights", [])
-        except Exception as e:
-            st.warning(f"OpenAI analysis failed: {str(e)}")
-            return []
+        return insights
     
-    def get_anthropic_insights(self, metrics_summary: Dict) -> List[str]:
-        """Get insights from Anthropic Claude"""
+    def _analyze_metrics_locally(self, metrics_summary: Dict) -> Dict[str, List[str]]:
+        """Analyze metrics without AI"""
+        insights = {
+            "key_findings": [],
+            "actions": [],
+            "warnings": []
+        }
+        
+        # Analyze return rates
+        if 'Overall Return Rate' in metrics_summary:
+            return_data = metrics_summary['Overall Return Rate']
+            current_rate = return_data['current_value']
+            yoy_change = return_data.get('yoy_change', 0)
+            
+            if current_rate > 0.10:  # Above 10%
+                insights["warnings"].append(f"Return rate is high at {current_rate:.1%} - investigate quality issues")
+            elif yoy_change and yoy_change < -0.1:  # Improved by more than 10%
+                insights["key_findings"].append(f"Return rate improved by {abs(yoy_change):.1%} YoY - quality initiatives working")
+        
+        # Analyze inspection coverage
+        if 'Percent Order Inspected' in metrics_summary:
+            inspection_data = metrics_summary['Percent Order Inspected']
+            coverage = inspection_data['current_value']
+            
+            if coverage < 0.80:
+                insights["actions"].append(f"Increase inspection coverage from {coverage:.1%} to at least 85%")
+            
+        # Analyze costs
+        if 'Average Cost per Inspection' in metrics_summary:
+            cost_data = metrics_summary['Average Cost per Inspection']
+            current_cost = cost_data['current_value']
+            yoy_change = cost_data.get('yoy_change', 0)
+            
+            if yoy_change and yoy_change > 0.15:  # Increased by more than 15%
+                insights["warnings"].append(f"Inspection costs up {yoy_change:.1%} YoY - review efficiency")
+        
+        # Add general insights if none found
+        if not any(insights.values()):
+            insights["key_findings"].append("Quality metrics are stable - maintain current processes")
+            insights["actions"].append("Continue monitoring for trend changes")
+        
+        return insights
+    
+    def _get_claude_insights(self, metrics_summary: Dict) -> Optional[Dict[str, List[str]]]:
+        """Get insights from Claude"""
         if not self.anthropic_client:
-            return []
+            return None
         
         prompt = f"""
-        As a Quality Manager expert, analyze these quality metrics and provide 3-4 key insights:
+        Analyze these quality metrics as a quality manager and provide insights.
         
-        {json.dumps(metrics_summary, indent=2)}
+        Metrics: {json.dumps(metrics_summary, indent=2)}
         
-        Focus on:
-        1. Systemic quality issues
-        2. Cost-benefit analysis of current inspection rates
-        3. Seasonal patterns or anomalies
-        4. Process improvement opportunities
+        Provide:
+        1. 2-3 key findings about quality performance
+        2. 2-3 specific actions to improve
+        3. 1-2 warnings about risks or concerning trends
         
-        Be analytical and focus on root causes. Return a JSON object with key "insights" containing a list of strings.
+        Format as JSON with keys: "key_findings", "actions", "warnings" (each containing a list of strings)
         """
         
         try:
             response = self.anthropic_client.messages.create(
-                model="claude-3-haiku-20240307",
+                model="claude-3-haiku-20240307",  # Using Haiku which is reliable
                 messages=[{"role": "user", "content": prompt}],
                 max_tokens=1000,
                 temperature=0.7
             )
-            content = response.content[0].text
             
-            # Extract JSON from response
+            content = response.content[0].text
             json_match = re.search(r'\{.*\}', content, re.DOTALL)
             if json_match:
-                result = json.loads(json_match.group())
-                return result.get("insights", [])
-            return []
+                return json.loads(json_match.group())
+            return None
         except Exception as e:
-            st.warning(f"Claude analysis failed: {str(e)}")
-            return []
+            st.warning(f"Claude analysis error: {str(e)}")
+            return None
     
-    def synthesize_insights(self, openai_insights: List[str], anthropic_insights: List[str], 
-                          metrics_summary: Dict) -> Dict[str, List[str]]:
-        """Use Claude to synthesize insights from both AI analyses"""
-        if not self.anthropic_client:
-            return {"synthesis": ["Unable to synthesize insights"], "actions": []}
+    def _get_openai_insights(self, metrics_summary: Dict) -> Optional[Dict[str, List[str]]]:
+        """Get insights from OpenAI"""
+        if not self.openai_client:
+            return None
         
         prompt = f"""
-        You are a senior Quality Manager reviewing analyses from two AI systems about quality metrics.
+        Analyze these quality metrics and provide insights.
         
-        Current Metrics Summary:
-        {json.dumps(metrics_summary, indent=2)}
+        Metrics: {json.dumps(metrics_summary, indent=2)}
         
-        Analysis from AI System 1 (GPT-4):
-        {json.dumps(openai_insights, indent=2)}
+        Provide:
+        1. 2-3 key findings
+        2. 2-3 actions to improve
+        3. 1-2 warnings about risks
         
-        Analysis from AI System 2 (Claude):
-        {json.dumps(anthropic_insights, indent=2)}
-        
-        Please:
-        1. Synthesize the key findings from both analyses into 2-3 comprehensive insights
-        2. Identify any conflicting viewpoints and reconcile them
-        3. Provide 2-3 specific action items based on the combined analysis
-        
-        Return a JSON object with two keys:
-        - "synthesis": list of synthesized insights
-        - "actions": list of specific action items
+        Return JSON with keys: "key_findings", "actions", "warnings"
         """
         
         try:
-            response = self.anthropic_client.messages.create(
-                model="claude-3-sonnet-20240229",  # Using Sonnet for better synthesis
+            response = self.openai_client.chat.completions.create(
+                model="gpt-3.5-turbo",  # Using 3.5 for reliability
                 messages=[{"role": "user", "content": prompt}],
-                max_tokens=1500,
-                temperature=0.5
+                response_format={"type": "json_object"},
+                temperature=0.7
             )
-            content = response.content[0].text
-            
-            json_match = re.search(r'\{.*\}', content, re.DOTALL)
-            if json_match:
-                result = json.loads(json_match.group())
-                return result
-            return {"synthesis": ["Unable to parse synthesis"], "actions": []}
+            return json.loads(response.choices[0].message.content)
         except Exception as e:
-            return {"synthesis": [f"Synthesis failed: {str(e)}"], "actions": []}
-    
-    def categorize_metrics(self, metric_names: List[str]) -> Dict[str, List[str]]:
-        """Categorize metrics into logical groups"""
-        categories = {
-            "Quality & Returns": [],
-            "Operations": [],
-            "Financial": [],
-            "Volume & Throughput": []
-        }
-        
-        for metric in metric_names:
-            metric_lower = metric.lower()
-            if any(term in metric_lower for term in ['return', 'defect', 'quality', 'rework']):
-                categories["Quality & Returns"].append(metric)
-            elif any(term in metric_lower for term in ['inspect', 'percent']):
-                categories["Operations"].append(metric)
-            elif any(term in metric_lower for term in ['cost', '$', 'price']):
-                categories["Financial"].append(metric)
-            elif any(term in metric_lower for term in ['order', 'total', 'volume']):
-                categories["Volume & Throughput"].append(metric)
-        
-        # Remove empty categories
-        return {k: v for k, v in categories.items() if v}
+            st.warning(f"OpenAI analysis error: {str(e)}")
+            return None
 
 # --- DATA PROCESSING ---
 def prepare_data(df: pd.DataFrame) -> pd.DataFrame:
-    """Prepare data with YoY and MoM calculations"""
+    """Prepare data with calculations"""
     # Convert data types
     df['Value'] = pd.to_numeric(df['Value'], errors='coerce')
     df['Year'] = pd.to_numeric(df['Year'], errors='coerce')
     
-    # Handle Channel column if it exists
+    # Handle Channel column if exists
     if 'Channel' in df.columns:
-        # For aggregated metrics, combine channels
-        df_agg = df.groupby(['Metric', 'Year', 'Month'])['Value'].sum().reset_index()
-        df_agg['Channel'] = 'Total'
-        df = pd.concat([df, df_agg], ignore_index=True)
+        # Keep channel-specific data
+        pass
     
-    # Create proper date column
-    df['Date'] = pd.to_datetime(df['Year'].astype(int).astype(str) + '-' + df['Month'], 
-                                format='%Y-%b', errors='coerce')
+    # Create date column
+    df['Date'] = pd.to_datetime(
+        df['Year'].astype(int).astype(str) + '-' + df['Month'], 
+        format='%Y-%b', 
+        errors='coerce'
+    )
     
     # Remove invalid dates
     df = df[df['Date'].notna()]
@@ -266,211 +272,245 @@ def prepare_data(df: pd.DataFrame) -> pd.DataFrame:
     df['MoM_Change'] = df.groupby('Metric')['Value'].pct_change()
     df['YoY_Change'] = df.groupby('Metric')['Value'].pct_change(12)
     
-    # Add trend indicator (based on 3-month moving average)
-    df['MA3'] = df.groupby('Metric')['Value'].transform(lambda x: x.rolling(3, min_periods=1).mean())
-    
-    # Determine trend based on metric type
-    def calculate_trend(x, metric_name):
-        if len(x) < 2:
-            return 'Insufficient Data'
-        
-        # Determine if lower is better
-        lower_is_better = any(term in metric_name.lower() for term in ['cost', 'return', 'defect', 'rework', 'rate'])
-        
-        # Compare recent vs older values
-        if len(x) >= 3:
-            recent = x.iloc[-1]
-            older = x.iloc[-3]
-        else:
-            recent = x.iloc[-1]
-            older = x.iloc[0]
-        
-        if lower_is_better:
-            return 'Improving' if recent < older else 'Worsening'
-        else:
-            return 'Improving' if recent > older else 'Worsening'
-    
-    # Apply trend calculation
-    for metric in df['Metric'].unique():
-        mask = df['Metric'] == metric
-        df.loc[mask, 'Trend'] = calculate_trend(df.loc[mask, 'MA3'], metric)
+    # Calculate 3-month moving average
+    df['MA3'] = df.groupby('Metric')['Value'].transform(
+        lambda x: x.rolling(3, min_periods=1).mean()
+    )
     
     return df
 
 def calculate_summary_metrics(df: pd.DataFrame) -> Dict:
-    """Calculate summary metrics for AI insights"""
+    """Calculate summary metrics"""
     summary = {}
-    
     latest_date = df['Date'].max()
     
     for metric in df['Metric'].unique():
         metric_data = df[df['Metric'] == metric]
+        
+        # Get latest data point
         latest = metric_data[metric_data['Date'] == latest_date]
         
         if not latest.empty:
             latest_row = latest.iloc[0]
             
-            # Calculate 3-month average
-            last_3_months = metric_data.nlargest(3, 'Date')['Value'].mean()
+            # Get previous year same month for true YoY
+            prev_year = metric_data[
+                metric_data['Date'] == latest_date - pd.DateOffset(years=1)
+            ]
             
-            # Calculate year-to-date average
-            ytd = metric_data[metric_data['Year'] == latest_date.year]['Value'].mean()
+            yoy_change = None
+            if not prev_year.empty:
+                yoy_change = (latest_row['Value'] - prev_year.iloc[0]['Value']) / prev_year.iloc[0]['Value']
+            
+            # Calculate trend
+            recent_data = metric_data.nlargest(6, 'Date')
+            if len(recent_data) >= 2:
+                trend = 'up' if recent_data.iloc[0]['Value'] > recent_data.iloc[-1]['Value'] else 'down'
+            else:
+                trend = 'neutral'
             
             summary[metric] = {
                 'current_value': float(latest_row['Value']),
-                'yoy_change': float(latest_row['YoY_Change']) if pd.notna(latest_row['YoY_Change']) else None,
+                'yoy_change': float(yoy_change) if yoy_change is not None else None,
                 'mom_change': float(latest_row['MoM_Change']) if pd.notna(latest_row['MoM_Change']) else None,
-                'trend': latest_row['Trend'],
-                '3_month_avg': float(last_3_months),
-                'ytd_avg': float(ytd)
+                'trend': trend,
+                '3_month_avg': float(metric_data.nlargest(3, 'Date')['Value'].mean())
             }
     
     return summary
 
 # --- VISUALIZATION FUNCTIONS ---
-def create_trend_sparkline(df: pd.DataFrame, metric: str) -> go.Figure:
-    """Create a small sparkline chart"""
-    metric_data = df[df['Metric'] == metric].sort_values('Date').tail(12)  # Last 12 months
+def create_metric_dashboard(df: pd.DataFrame, metrics_summary: Dict) -> None:
+    """Create a comprehensive metrics dashboard"""
     
-    fig = go.Figure()
-    fig.add_trace(go.Scatter(
-        x=metric_data['Date'],
-        y=metric_data['Value'],
-        mode='lines',
-        line=dict(color='#3b82f6', width=2),
-        fill='tozeroy',
-        fillcolor='rgba(59, 130, 246, 0.1)'
-    ))
+    # Group metrics by type
+    categories = {
+        "📦 Quality Metrics": ['Overall Return Rate'],
+        "🔍 Operations": ['Percent Order Inspected', 'Orders Inspected', 'Total Orders'],
+        "💰 Financial": ['Total Cost of Inspection', 'Average Cost per Inspection']
+    }
     
-    fig.update_layout(
-        height=80,
-        margin=dict(l=0, r=0, t=0, b=0),
-        showlegend=False,
-        xaxis=dict(visible=False),
-        yaxis=dict(visible=False),
-        plot_bgcolor='rgba(0,0,0,0)',
-        paper_bgcolor='rgba(0,0,0,0)'
-    )
-    
-    return fig
-
-def create_comparison_chart(df: pd.DataFrame, metric: str) -> go.Figure:
-    """Create YoY comparison chart"""
-    metric_data = df[df['Metric'] == metric].sort_values('Date')
-    current_year = metric_data['Year'].max()
-    
-    fig = go.Figure()
-    
-    # Add traces for each year
-    for year in sorted(metric_data['Year'].unique(), reverse=True):
-        year_data = metric_data[metric_data['Year'] == year]
+    for category, metric_list in categories.items():
+        st.markdown(f"### {category}")
         
-        fig.add_trace(go.Scatter(
-            x=year_data['Month'],
-            y=year_data['Value'],
-            name=str(int(year)),
-            mode='lines+markers',
-            line=dict(width=3 if year == current_year else 2),
-            marker=dict(size=8 if year == current_year else 6)
-        ))
-    
-    # Format based on metric type
-    is_percent = any(term in metric.lower() for term in ['rate', 'percent', '%'])
-    is_currency = any(term in metric.lower() for term in ['cost', '$'])
-    
-    yaxis_format = '.1%' if is_percent else ('$,.0f' if is_currency else ',.0f')
-    
-    fig.update_layout(
-        title=f"{metric} - Year over Year Comparison",
-        xaxis_title="Month",
-        yaxis_title="Value",
-        yaxis_tickformat=yaxis_format,
-        hovermode='x unified',
-        template='plotly_white',
-        height=400,
-        legend=dict(
-            orientation="h",
-            yanchor="bottom",
-            y=1.02,
-            xanchor="right",
-            x=1
-        )
-    )
-    
-    return fig
+        cols = st.columns(len([m for m in metric_list if m in metrics_summary]))
+        col_idx = 0
+        
+        for metric in metric_list:
+            if metric in metrics_summary:
+                with cols[col_idx]:
+                    data = metrics_summary[metric]
+                    
+                    # Format value based on type
+                    is_percent = any(term in metric.lower() for term in ['rate', 'percent', '%'])
+                    is_currency = any(term in metric.lower() for term in ['cost', '$'])
+                    
+                    if is_percent:
+                        value_str = f"{data['current_value']:.1%}"
+                    elif is_currency:
+                        value_str = f"${data['current_value']:,.2f}"
+                    else:
+                        value_str = f"{data['current_value']:,.0f}"
+                    
+                    # Create metric
+                    yoy = data.get('yoy_change')
+                    if yoy is not None:
+                        delta = f"{yoy:+.1%} YoY"
+                    else:
+                        delta = "No YoY data"
+                    
+                    st.metric(
+                        label=metric,
+                        value=value_str,
+                        delta=delta
+                    )
+                    
+                    # Add mini chart
+                    metric_data = df[df['Metric'] == metric].tail(12)
+                    fig = go.Figure()
+                    fig.add_trace(go.Scatter(
+                        x=metric_data['Date'],
+                        y=metric_data['Value'],
+                        mode='lines',
+                        line=dict(color='#3b82f6', width=2),
+                        showlegend=False
+                    ))
+                    fig.update_layout(
+                        height=100,
+                        margin=dict(l=0, r=0, t=0, b=0),
+                        xaxis=dict(visible=False),
+                        yaxis=dict(visible=False),
+                        paper_bgcolor='rgba(0,0,0,0)',
+                        plot_bgcolor='rgba(0,0,0,0)'
+                    )
+                    st.plotly_chart(fig, use_container_width=True)
+                
+                col_idx += 1
 
-def create_metric_card(metric: str, data: Dict) -> None:
-    """Create a metric card with value and change"""
-    current_value = data['current_value']
-    change = data['yoy_change']
+def create_main_chart(df: pd.DataFrame, metric: str, chart_type: str = "trend") -> go.Figure:
+    """Create main analysis chart"""
+    metric_data = df[df['Metric'] == metric].sort_values('Date')
     
-    # Determine formatting
+    if chart_type == "comparison":
+        # Year over year comparison
+        fig = go.Figure()
+        
+        for year in sorted(metric_data['Year'].unique(), reverse=True):
+            year_data = metric_data[metric_data['Year'] == year]
+            
+            fig.add_trace(go.Scatter(
+                x=year_data['Month'],
+                y=year_data['Value'],
+                name=str(int(year)),
+                mode='lines+markers',
+                line=dict(width=3),
+                marker=dict(size=8)
+            ))
+        
+        fig.update_layout(
+            title="Year-over-Year Comparison",
+            xaxis_title="Month",
+            yaxis_title="Value",
+            hovermode='x unified',
+            height=400
+        )
+        
+    else:  # trend analysis
+        fig = go.Figure()
+        
+        # Main value line
+        fig.add_trace(go.Scatter(
+            x=metric_data['Date'],
+            y=metric_data['Value'],
+            name='Actual',
+            mode='lines+markers',
+            line=dict(color='#3b82f6', width=3)
+        ))
+        
+        # Moving average
+        fig.add_trace(go.Scatter(
+            x=metric_data['Date'],
+            y=metric_data['MA3'],
+            name='3-Month Avg',
+            mode='lines',
+            line=dict(color='#ef4444', width=2, dash='dash')
+        ))
+        
+        # Add annotations for significant changes
+        for idx, row in metric_data.iterrows():
+            if pd.notna(row['MoM_Change']) and abs(row['MoM_Change']) > 0.15:
+                fig.add_annotation(
+                    x=row['Date'],
+                    y=row['Value'],
+                    text=f"{row['MoM_Change']:+.0%}",
+                    showarrow=True,
+                    arrowhead=2,
+                    arrowsize=1,
+                    arrowwidth=2,
+                    arrowcolor="#6b7280"
+                )
+        
+        fig.update_layout(
+            title="Trend Analysis",
+            xaxis_title="Date",
+            yaxis_title="Value",
+            hovermode='x unified',
+            height=400
+        )
+    
+    # Format y-axis based on metric type
     is_percent = any(term in metric.lower() for term in ['rate', 'percent', '%'])
     is_currency = any(term in metric.lower() for term in ['cost', '$'])
     
     if is_percent:
-        value_str = f"{current_value:.1%}"
-        change_str = f"{change:+.1%}" if change else "N/A"
+        fig.update_yaxis(tickformat='.1%')
     elif is_currency:
-        value_str = f"${current_value:,.2f}"
-        change_str = f"{change:+.1%}" if change else "N/A"
-    else:
-        value_str = f"{current_value:,.0f}"
-        change_str = f"{change:+.1%}" if change else "N/A"
+        fig.update_yaxis(tickformat='$,.0f')
     
-    # Determine if improvement
-    lower_is_better = any(term in metric.lower() for term in ['cost', 'return', 'defect', 'rework'])
-    is_good = (change < 0 and lower_is_better) or (change > 0 and not lower_is_better) if change else None
-    
-    # Color coding
-    if is_good is None:
-        icon = "➖"
-    elif is_good:
-        icon = "✅"
-    else:
-        icon = "⚠️"
-    
-    st.metric(
-        label=metric,
-        value=value_str,
-        delta=f"{icon} {change_str} YoY",
-        delta_color="off"
+    fig.update_layout(
+        template='plotly_white',
+        font=dict(family="Inter, sans-serif")
     )
+    
+    return fig
 
 # --- MAIN APP ---
 def main():
-    st.title("🧠 AI-Powered Quality Dashboard")
-    st.markdown("Dual AI analysis with synthesized insights for comprehensive quality management")
+    st.title("📊 Quality Intelligence Dashboard")
+    st.markdown("Comprehensive quality metrics analysis with AI-powered insights")
     
     # Check for API keys
     openai_key = st.secrets.get("OPENAI_API_KEY", "")
     anthropic_key = st.secrets.get("ANTHROPIC_API_KEY", "")
     
-    if not openai_key and not anthropic_key:
-        st.error("No AI API keys found in Streamlit secrets. Please add OPENAI_API_KEY or ANTHROPIC_API_KEY.")
-        st.stop()
-    
-    # Show available AI providers in sidebar
+    # Sidebar
     with st.sidebar:
-        st.markdown("### 🤖 AI Analysis Status")
+        st.markdown("### 🤖 AI Status")
         
-        col1, col2 = st.columns(2)
-        with col1:
-            if openai_key and OPENAI_AVAILABLE:
-                st.success("✅ OpenAI")
-            else:
-                st.error("❌ OpenAI")
+        if openai_key:
+            st.success("✅ OpenAI Connected")
+        else:
+            st.info("ℹ️ OpenAI Not Configured")
+            
+        if anthropic_key:
+            st.success("✅ Claude Connected")
+        else:
+            st.info("ℹ️ Claude Not Configured")
         
-        with col2:
-            if anthropic_key and ANTHROPIC_AVAILABLE:
-                st.success("✅ Claude")
-            else:
-                st.error("❌ Claude")
+        if not openai_key and not anthropic_key:
+            st.warning("Running in local analysis mode")
         
         st.markdown("---")
-        st.info("This dashboard uses both AI systems to provide comprehensive insights, then synthesizes them for actionable recommendations.")
+        st.markdown("### 📈 Dashboard Info")
+        st.info(
+            "This dashboard analyzes quality metrics including:\n"
+            "• Return rates\n"
+            "• Inspection coverage\n"
+            "• Cost efficiency\n"
+            "• Order volumes"
+        )
     
-    # Initialize AI analyzer
+    # Initialize analyzer
     analyzer = AIQualityAnalyzer(openai_key, anthropic_key)
     
     # Load data
@@ -478,236 +518,151 @@ def main():
         with open('quality_data_clean.csv', 'r') as f:
             csv_content = f.read()
         
-        with st.spinner("🤖 Loading and preparing quality data..."):
-            df = analyzer.parse_quality_data(csv_content)
-            
-            if df is None:
-                st.stop()
-            
-            # Prepare data
-            df = prepare_data(df)
-            
-            # Get metrics summary
-            metrics_summary = calculate_summary_metrics(df)
-            
-            # Categorize metrics
-            categories = analyzer.categorize_metrics(list(df['Metric'].unique()))
-    
+        df = analyzer.parse_quality_data(csv_content)
+        if df is None:
+            st.stop()
+        
+        # Prepare data
+        df = prepare_data(df)
+        metrics_summary = calculate_summary_metrics(df)
+        
     except FileNotFoundError:
-        st.error("quality_data_clean.csv not found!")
+        st.error("❌ quality_data_clean.csv not found!")
+        st.info("Please ensure the CSV file is in the same directory as this app.")
         st.stop()
     except Exception as e:
         st.error(f"Error loading data: {e}")
         st.stop()
     
-    # Display AI insights at the top
-    st.markdown("## 🔍 Multi-AI Analysis & Synthesis")
+    # Display insights
+    st.markdown("## 💡 Intelligent Insights")
     
-    # Create columns for dual AI analysis
-    col1, col2 = st.columns(2)
+    with st.spinner("Analyzing quality metrics..."):
+        insights = analyzer.generate_insights_with_ai(metrics_summary)
     
-    with st.spinner("🤖 Running dual AI analysis..."):
-        # Get insights from both AIs
-        openai_insights = analyzer.get_openai_insights(metrics_summary)
-        anthropic_insights = analyzer.get_anthropic_insights(metrics_summary)
+    # Display insights in cards
+    col1, col2, col3 = st.columns([1, 1, 1])
     
-    # Display individual AI insights
     with col1:
-        st.markdown("#### 🟦 GPT-4 Analysis")
-        if openai_insights:
-            for insight in openai_insights:
-                st.markdown(f"""
-                <div class="ai-insight-box">
-                    • {insight}
-                </div>
-                """, unsafe_allow_html=True)
-        else:
-            st.info("GPT-4 analysis not available")
+        st.markdown("#### 🎯 Key Findings")
+        for finding in insights.get("key_findings", ["No findings available"]):
+            st.markdown(f"""
+            <div class="insight-card">
+                {finding}
+            </div>
+            """, unsafe_allow_html=True)
     
     with col2:
-        st.markdown("#### 🟣 Claude Analysis")
-        if anthropic_insights:
-            for insight in anthropic_insights:
-                st.markdown(f"""
-                <div class="ai-insight-box">
-                    • {insight}
-                </div>
-                """, unsafe_allow_html=True)
-        else:
-            st.info("Claude analysis not available")
+        st.markdown("#### ✅ Recommended Actions")
+        for action in insights.get("actions", ["No actions available"]):
+            st.markdown(f"""
+            <div class="action-card">
+                {action}
+            </div>
+            """, unsafe_allow_html=True)
     
-    # Synthesized insights
-    if openai_insights or anthropic_insights:
-        st.markdown("### 🎯 Synthesized Insights & Action Items")
-        
-        with st.spinner("🧠 Synthesizing insights from both AI analyses..."):
-            synthesis_result = analyzer.synthesize_insights(
-                openai_insights, 
-                anthropic_insights,
-                metrics_summary
-            )
-        
-        # Display synthesis
-        if synthesis_result.get("synthesis"):
-            for i, insight in enumerate(synthesis_result["synthesis"], 1):
-                st.markdown(f"""
-                <div class="synthesis-box">
-                    <strong>Key Finding {i}:</strong> {insight}
-                </div>
-                """, unsafe_allow_html=True)
-        
-        # Display action items
-        if synthesis_result.get("actions"):
-            st.markdown("#### 📋 Recommended Actions")
-            for i, action in enumerate(synthesis_result["actions"], 1):
-                st.markdown(f"""
-                <div class="insight-box">
-                    <strong>Action {i}:</strong> {action}
-                </div>
-                """, unsafe_allow_html=True)
+    with col3:
+        st.markdown("#### ⚠️ Warnings")
+        for warning in insights.get("warnings", ["No warnings"]):
+            st.markdown(f"""
+            <div class="warning-card">
+                {warning}
+            </div>
+            """, unsafe_allow_html=True)
     
     st.markdown("---")
     
-    # Key Metrics Overview
-    st.markdown("## 📊 Key Metrics Overview")
-    
-    # Get latest values
+    # Metrics Dashboard
+    st.markdown("## 📊 Metrics Overview")
     latest_date = df['Date'].max()
     st.caption(f"Latest data: {latest_date.strftime('%B %Y')}")
     
-    # Display metrics by category
-    for category, metrics in categories.items():
-        if metrics:
-            st.markdown(f"### {category}")
-            
-            cols = st.columns(min(len(metrics), 4))
-            
-            for i, metric in enumerate(metrics):
-                if metric in metrics_summary:
-                    with cols[i % len(cols)]:
-                        create_metric_card(metric, metrics_summary[metric])
-                        
-                        # Add sparkline
-                        fig = create_trend_sparkline(df, metric)
-                        st.plotly_chart(fig, use_container_width=True, key=f"spark_{metric}")
+    create_metric_dashboard(df, metrics_summary)
     
     st.markdown("---")
     
-    # Detailed Analysis Section
-    st.markdown("## 📈 Detailed Analysis")
+    # Detailed Analysis
+    st.markdown("## 🔍 Detailed Analysis")
     
-    # Metric selector
-    col1, col2 = st.columns([3, 1])
+    col1, col2, col3 = st.columns([2, 1, 1])
     
     with col1:
         selected_metric = st.selectbox(
-            "Select metric for detailed view:",
+            "Select metric to analyze:",
             options=sorted(df['Metric'].unique()),
             index=0
         )
     
     with col2:
-        view_type = st.radio(
-            "View:",
-            ["Year over Year", "Trend Analysis"],
+        chart_type = st.radio(
+            "Chart type:",
+            ["Trend", "YoY Comparison"],
             horizontal=True
         )
     
-    # Display detailed chart
-    if view_type == "Year over Year":
-        fig = create_comparison_chart(df, selected_metric)
-        st.plotly_chart(fig, use_container_width=True)
-    else:
-        # Trend analysis with MoM changes
-        metric_data = df[df['Metric'] == selected_metric].sort_values('Date')
-        
-        fig = go.Figure()
-        
-        # Value line
-        fig.add_trace(go.Scatter(
-            x=metric_data['Date'],
-            y=metric_data['Value'],
-            name='Value',
-            yaxis='y',
-            line=dict(color='#3b82f6', width=3)
-        ))
-        
-        # MoM change bars
-        fig.add_trace(go.Bar(
-            x=metric_data['Date'],
-            y=metric_data['MoM_Change'],
-            name='MoM Change %',
-            yaxis='y2',
-            marker_color=np.where(metric_data['MoM_Change'] > 0, '#10b981', '#ef4444'),
-            opacity=0.7
-        ))
-        
-        is_percent = any(term in selected_metric.lower() for term in ['rate', 'percent', '%'])
-        is_currency = any(term in selected_metric.lower() for term in ['cost', '$'])
-        y1_format = '.1%' if is_percent else ('$,.0f' if is_currency else ',.0f')
-        
-        fig.update_layout(
-            title=f"{selected_metric} - Trend Analysis with Month-over-Month Changes",
-            xaxis_title="Date",
-            yaxis=dict(title="Value", side="left", tickformat=y1_format),
-            yaxis2=dict(title="MoM Change %", side="right", tickformat='.1%', overlaying='y'),
-            hovermode='x unified',
-            template='plotly_white',
-            height=400
-        )
-        
-        st.plotly_chart(fig, use_container_width=True)
+    with col3:
+        # Show metric info
+        if selected_metric in metrics_summary:
+            data = metrics_summary[selected_metric]
+            trend = data.get('trend', 'neutral')
+            if trend == 'up':
+                st.markdown('<h3 class="trend-up">↑ Trending Up</h3>', unsafe_allow_html=True)
+            elif trend == 'down':
+                st.markdown('<h3 class="trend-down">↓ Trending Down</h3>', unsafe_allow_html=True)
+            else:
+                st.markdown('<h3 class="trend-neutral">→ Stable</h3>', unsafe_allow_html=True)
+    
+    # Display chart
+    fig = create_main_chart(
+        df, 
+        selected_metric, 
+        "comparison" if chart_type == "YoY Comparison" else "trend"
+    )
+    st.plotly_chart(fig, use_container_width=True)
     
     # Data table
-    with st.expander("📋 View Raw Data"):
-        metric_display = df[df['Metric'] == selected_metric][
+    with st.expander("📋 View Data Table"):
+        display_df = df[df['Metric'] == selected_metric][
             ['Date', 'Value', 'MoM_Change', 'YoY_Change']
-        ].sort_values('Date', ascending=False)
+        ].sort_values('Date', ascending=False).head(12)
         
-        # Format the display
-        metric_display['MoM_Change'] = metric_display['MoM_Change'].map(
-            lambda x: f"{x:.1%}" if pd.notna(x) else "N/A"
+        # Format percentages
+        display_df['MoM_Change'] = display_df['MoM_Change'].map(
+            lambda x: f"{x:.1%}" if pd.notna(x) else "-"
         )
-        metric_display['YoY_Change'] = metric_display['YoY_Change'].map(
-            lambda x: f"{x:.1%}" if pd.notna(x) else "N/A"
+        display_df['YoY_Change'] = display_df['YoY_Change'].map(
+            lambda x: f"{x:.1%}" if pd.notna(x) else "-"
         )
         
-        st.dataframe(metric_display, use_container_width=True, hide_index=True)
+        st.dataframe(display_df, use_container_width=True, hide_index=True)
     
-    # Performance Summary
+    # Footer summary
     st.markdown("---")
-    st.markdown("## 🎯 Performance Summary")
+    st.markdown("### 🎯 Quick Summary")
     
-    col1, col2, col3 = st.columns(3)
+    col1, col2, col3, col4 = st.columns(4)
     
-    # Calculate overall metrics
-    return_rate = df[(df['Metric'] == 'Overall Return Rate') & (df['Date'] == latest_date)]
-    inspection_rate = df[(df['Metric'] == 'Percent Order Inspected') & (df['Date'] == latest_date)]
-    avg_cost = df[(df['Metric'] == 'Average Cost per Inspection') & (df['Date'] == latest_date)]
+    # Calculate key metrics
+    return_rate = metrics_summary.get('Overall Return Rate', {}).get('current_value', 0)
+    quality_score = max(0, 100 - (return_rate * 100)) if return_rate else 0
+    
+    inspection_rate = metrics_summary.get('Percent Order Inspected', {}).get('current_value', 0)
+    
+    total_orders = metrics_summary.get('Total Orders', {}).get('current_value', 0)
+    
+    avg_cost = metrics_summary.get('Average Cost per Inspection', {}).get('current_value', 0)
     
     with col1:
-        if not return_rate.empty:
-            val = return_rate.iloc[0]['Value']
-            yoy = return_rate.iloc[0]['YoY_Change']
-            st.markdown("**🏆 Overall Quality Score**")
-            quality_score = max(0, 100 - (val * 100))  # Convert return rate to quality score
-            st.metric("Quality Score", f"{quality_score:.0f}/100", 
-                     f"{-yoy*100:.1f} pts YoY" if pd.notna(yoy) else "N/A")
+        st.metric("Quality Score", f"{quality_score:.0f}/100")
     
     with col2:
-        if not inspection_rate.empty:
-            val = inspection_rate.iloc[0]['Value']
-            st.markdown("**🔍 Inspection Coverage**")
-            st.metric("Coverage Rate", f"{val:.1%}", 
-                     "✅ Above 85%" if val > 0.85 else "⚠️ Below target")
+        st.metric("Inspection Coverage", f"{inspection_rate:.0%}")
     
     with col3:
-        if not avg_cost.empty:
-            val = avg_cost.iloc[0]['Value']
-            yoy = avg_cost.iloc[0]['YoY_Change']
-            st.markdown("**💰 Cost Efficiency**")
-            st.metric("Cost per Inspection", f"${val:.2f}", 
-                     f"{yoy:.1%} YoY" if pd.notna(yoy) else "N/A")
+        st.metric("Monthly Orders", f"{total_orders:,.0f}")
+    
+    with col4:
+        st.metric("Avg Inspection Cost", f"${avg_cost:.2f}")
 
 if __name__ == "__main__":
     main()
