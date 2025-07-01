@@ -309,9 +309,10 @@ def load_and_process_data():
         df['month_lower'] = df['month'].str.lower()
         df['month_num'] = df['month_lower'].map(month_map)
         
-        # Create date
+        # Create date - add day column (default to 1st of each month)
+        df['day'] = 1
         df['date'] = pd.to_datetime(
-            df[['year', 'month_num']].rename(columns={'year': 'year', 'month_num': 'month'})
+            df[['year', 'month_num', 'day']].rename(columns={'year': 'year', 'month_num': 'month', 'day': 'day'})
         )
         
         # Clean up metric names
