@@ -339,44 +339,91 @@ def get_current_metrics(df):
     latest_date = df['date'].max()
     metrics = {}
     
+    # Handle metrics differently based on whether they have channels
     for metric in df['metric'].unique():
         metric_data = df[df['metric'] == metric]
-        current = metric_data[metric_data['date'] == latest_date]
         
-        if not current.empty:
-            current_val = current.iloc[0]['value']
-            
-            # Get YoY value
-            prev_year = metric_data[metric_data['date'] == latest_date - pd.DateOffset(years=1)]
-            yoy_change = None
-            if not prev_year.empty:
-                yoy_change = (current_val - prev_year.iloc[0]['value']) / prev_year.iloc[0]['value']
-            
-            # Get last 12 months of data
-            last_12_months = metric_data.nlargest(12, 'date').sort_values('date')
-            
-            # Calculate trend
-            if len(last_12_months) >= 6:
-                recent_6 = last_12_months.tail(6)
-                first_val = recent_6.iloc[0]['value']
-                last_val = recent_6.iloc[-1]['value']
+        # Check if this metric has channel data
+        if 'channel' in metric_data.columns and metric_data['channel'].notna().any():
+            # Process each channel separately
+            for channel in metric_data['channel'].dropna().unique():
+                channel_data = metric_data[metric_data['channel'] == channel]
+                current = channel_data[channel_data['date'] == latest_date]
                 
-                if abs(last_val - first_val) < (first_val * 0.02):
-                    trend = 'stable'
-                elif last_val > first_val:
-                    trend = 'increasing'
-                else:
-                    trend = 'decreasing'
-            else:
-                trend = 'stable'
+                if not current.empty:
+                    current_val = current.iloc[0]['value']
+                    
+                    # Get YoY value
+                    prev_year = channel_data[channel_data['date'] == latest_date - pd.DateOffset(years=1)]
+                    yoy_change = None
+                    if not prev_year.empty:
+                        yoy_change = (current_val - prev_year.iloc[0]['value']) / prev_year.iloc[0]['value']
+                    
+                    # Get last 12 months of data
+                    last_12_months = channel_data.nlargest(12, 'date').sort_values('date')
+                    
+                    # Calculate trend
+                    if len(last_12_months) >= 6:
+                        recent_6 = last_12_months.tail(6)
+                        first_val = recent_6.iloc[0]['value']
+                        last_val = recent_6.iloc[-1]['value']
+                        
+                        if abs(last_val - first_val) < (first_val * 0.02):
+                            trend = 'stable'
+                        elif last_val > first_val:
+                            trend = 'increasing'
+                        else:
+                            trend = 'decreasing'
+                    else:
+                        trend = 'stable'
+                    
+                    metric_key = f"{metric} - {channel}"
+                    metrics[metric_key] = {
+                        'value': current_val,
+                        'yoy_change': yoy_change,
+                        'trend': trend,
+                        'history': last_12_months[['date', 'value']],
+                        'full_history': channel_data[['date', 'value']],
+                        'channel': channel
+                    }
+        else:
+            # Process metric without channels (original logic)
+            current = metric_data[metric_data['date'] == latest_date]
             
-            metrics[metric] = {
-                'value': current_val,
-                'yoy_change': yoy_change,
-                'trend': trend,
-                'history': last_12_months[['date', 'value']],
-                'full_history': metric_data[['date', 'value']]
-            }
+            if not current.empty:
+                current_val = current.iloc[0]['value']
+                
+                # Get YoY value
+                prev_year = metric_data[metric_data['date'] == latest_date - pd.DateOffset(years=1)]
+                yoy_change = None
+                if not prev_year.empty:
+                    yoy_change = (current_val - prev_year.iloc[0]['value']) / prev_year.iloc[0]['value']
+                
+                # Get last 12 months of data
+                last_12_months = metric_data.nlargest(12, 'date').sort_values('date')
+                
+                # Calculate trend
+                if len(last_12_months) >= 6:
+                    recent_6 = last_12_months.tail(6)
+                    first_val = recent_6.iloc[0]['value']
+                    last_val = recent_6.iloc[-1]['value']
+                    
+                    if abs(last_val - first_val) < (first_val * 0.02):
+                        trend = 'stable'
+                    elif last_val > first_val:
+                        trend = 'increasing'
+                    else:
+                        trend = 'decreasing'
+                else:
+                    trend = 'stable'
+                
+                metrics[metric] = {
+                    'value': current_val,
+                    'yoy_change': yoy_change,
+                    'trend': trend,
+                    'history': last_12_months[['date', 'value']],
+                    'full_history': metric_data[['date', 'value']]
+                }
     
     return metrics
 
@@ -384,15 +431,23 @@ def calculate_quality_score(metrics):
     """Calculate overall quality score (0-100)"""
     score = 100
     
-    # Return rate impact (most critical)
-    if 'Overall Return Rate' in metrics:
-        return_rate = metrics['Overall Return Rate']['value']
+    # Return rate impact (most critical) - use Amazon return rate
+    if 'Overall Return Rate - Amazon' in metrics:
+        return_rate = metrics['Overall Return Rate - Amazon']['value']
         if return_rate > 0.10:
             score -= 50  # Critical
         elif return_rate > 0.08:
             score -= 30  # Warning
         elif return_rate > 0.05:
             score -= 15  # Acceptable
+    
+    # B2B return rate has different thresholds
+    if 'Overall Return Rate - B2B' in metrics:
+        b2b_rate = metrics['Overall Return Rate - B2B']['value']
+        if b2b_rate > 0.03:
+            score -= 20  # Warning for B2B
+        elif b2b_rate > 0.025:
+            score -= 10  # Caution
     
     # Inspection coverage impact
     if 'Percent Order Inspected' in metrics:
@@ -410,20 +465,32 @@ def get_status_and_actions(metrics):
     warnings = []
     urgent_actions = []
     
-    # Check return rate
-    if 'Overall Return Rate' in metrics:
-        return_rate = metrics['Overall Return Rate']['value']
-        return_trend = metrics['Overall Return Rate']['trend']
+    # Check Amazon return rate
+    if 'Overall Return Rate - Amazon' in metrics:
+        return_rate = metrics['Overall Return Rate - Amazon']['value']
+        return_trend = metrics['Overall Return Rate - Amazon']['trend']
         
         if return_rate > 0.10:
-            critical_issues.append(f"RETURN RATE {return_rate:.1%} - EXCEEDS 10%")
-            urgent_actions.append("STOP SHIPMENTS - QUALITY REVIEW")
+            critical_issues.append(f"AMAZON RETURN RATE {return_rate:.1%} - EXCEEDS 10%")
+            urgent_actions.append("STOP AMAZON SHIPMENTS - QUALITY REVIEW")
         elif return_rate > 0.08:
-            warnings.append(f"Return rate {return_rate:.1%} approaching limit")
-            urgent_actions.append("Increase QC to 100% sampling")
+            warnings.append(f"Amazon return rate {return_rate:.1%} approaching limit")
+            urgent_actions.append("Increase Amazon QC to 100% sampling")
         
         if return_trend == 'increasing' and return_rate > 0.05:
-            warnings.append("Return rate trending UP")
+            warnings.append("Amazon return rate trending UP")
+    
+    # Check B2B return rate separately
+    if 'Overall Return Rate - B2B' in metrics:
+        b2b_rate = metrics['Overall Return Rate - B2B']['value']
+        b2b_trend = metrics['Overall Return Rate - B2B']['trend']
+        
+        if b2b_rate > 0.03:
+            warnings.append(f"B2B return rate {b2b_rate:.1%} above 3% threshold")
+            urgent_actions.append("Review B2B packaging and shipping")
+        
+        if b2b_trend == 'increasing' and b2b_rate > 0.02:
+            warnings.append("B2B return rate trending UP")
     
     # Check inspection coverage
     if 'Percent Order Inspected' in metrics:
@@ -449,100 +516,139 @@ def get_status_and_actions(metrics):
     return status, status_type, critical_issues, warnings, urgent_actions
 
 # --- VISUALIZATION FUNCTIONS ---
-def create_tv_return_rate_chart(metrics):
-    """Create a large, clear return rate chart for TV display"""
-    if 'Overall Return Rate' not in metrics:
+def create_tv_return_rate_chart(df):
+    """Create return rate charts by channel for TV display"""
+    if df is None or df.empty:
         return None
     
-    data = metrics['Overall Return Rate']['history']
+    # Filter for return rate data
+    return_data = df[df['metric'] == 'Overall Return Rate'].copy()
+    if return_data.empty:
+        return None
     
-    fig = go.Figure()
+    # Get last 12 months
+    latest_date = return_data['date'].max()
+    twelve_months_ago = latest_date - pd.DateOffset(months=11)
+    return_data = return_data[return_data['date'] >= twelve_months_ago]
     
-    # Main line with markers
-    fig.add_trace(go.Scatter(
-        x=data['date'],
-        y=data['value'],
-        mode='lines+markers',
-        name='Return Rate',
-        line=dict(width=6, color='#2563eb'),
-        marker=dict(size=20, color='#2563eb', line=dict(width=3, color='white')),
-        fill='tozeroy',
-        fillcolor='rgba(37, 99, 235, 0.1)'
-    ))
+    # Separate by channel
+    amazon_data = return_data[return_data['channel'] == 'Amazon'].sort_values('date')
+    b2b_data = return_data[return_data['channel'] == 'B2B'].sort_values('date')
     
-    # Add value labels on points
-    for _, row in data.iterrows():
-        fig.add_annotation(
-            x=row['date'],
-            y=row['value'],
-            text=f"{row['value']:.1%}",
-            showarrow=False,
-            yshift=30,
-            font=dict(size=18, color='#1f2937', weight=700)
+    # Create subplots
+    fig = make_subplots(
+        rows=1, cols=2,
+        subplot_titles=("Amazon Return Rate", "B2B Return Rate"),
+        horizontal_spacing=0.15
+    )
+    
+    # Amazon chart
+    if not amazon_data.empty:
+        fig.add_trace(go.Scatter(
+            x=amazon_data['date'],
+            y=amazon_data['value'],
+            mode='lines+markers',
+            name='Amazon',
+            line=dict(width=6, color='#dc2626'),
+            marker=dict(size=20, color='#dc2626', line=dict(width=3, color='white')),
+            fill='tozeroy',
+            fillcolor='rgba(220, 38, 38, 0.1)'
+        ), row=1, col=1)
+        
+        # Add value labels for Amazon
+        for _, row in amazon_data.iterrows():
+            fig.add_annotation(
+                x=row['date'],
+                y=row['value'],
+                text=f"{row['value']:.1%}",
+                showarrow=False,
+                yshift=25,
+                font=dict(size=16, color='#1f2937', weight=700),
+                xref="x", yref="y"
+            )
+        
+        # Amazon thresholds
+        fig.add_hline(
+            y=0.10, line_dash="dash", line_color="#dc2626", line_width=4,
+            annotation_text="Critical 10%", annotation_position="right",
+            annotation_font_size=18, annotation_font_color="#dc2626",
+            row=1, col=1
+        )
+        fig.add_hline(
+            y=0.08, line_dash="dash", line_color="#f59e0b", line_width=4,
+            annotation_text="Warning 8%", annotation_position="right",
+            annotation_font_size=18, annotation_font_color="#f59e0b",
+            row=1, col=1
         )
     
-    # Critical threshold
-    fig.add_hline(
-        y=0.10, 
-        line_dash="dash", 
-        line_color="#dc2626", 
-        line_width=5,
-        annotation_text="CRITICAL 10%", 
-        annotation_position="right",
-        annotation_font_size=24,
-        annotation_font_color="#dc2626",
-        annotation_font_weight=700
+    # B2B chart
+    if not b2b_data.empty:
+        fig.add_trace(go.Scatter(
+            x=b2b_data['date'],
+            y=b2b_data['value'],
+            mode='lines+markers',
+            name='B2B',
+            line=dict(width=6, color='#10b981'),
+            marker=dict(size=20, color='#10b981', line=dict(width=3, color='white')),
+            fill='tozeroy',
+            fillcolor='rgba(16, 185, 129, 0.1)'
+        ), row=1, col=2)
+        
+        # Add value labels for B2B
+        for _, row in b2b_data.iterrows():
+            fig.add_annotation(
+                x=row['date'],
+                y=row['value'],
+                text=f"{row['value']:.1%}",
+                showarrow=False,
+                yshift=25,
+                font=dict(size=16, color='#1f2937', weight=700),
+                xref="x2", yref="y2"
+            )
+        
+        # B2B thresholds (different scale)
+        fig.add_hline(
+            y=0.03, line_dash="dash", line_color="#f59e0b", line_width=4,
+            annotation_text="Warning 3%", annotation_position="right",
+            annotation_font_size=18, annotation_font_color="#f59e0b",
+            row=1, col=2
+        )
+        fig.add_hline(
+            y=0.02, line_dash="dot", line_color="#10b981", line_width=4,
+            annotation_text="Target 2%", annotation_position="right",
+            annotation_font_size=18, annotation_font_color="#10b981",
+            row=1, col=2
+        )
+    
+    # Update layout
+    fig.update_xaxes(
+        showgrid=True, gridcolor='#e5e7eb',
+        tickfont=dict(size=18, color='#374151', weight=600),
+        tickformat='%b', dtick='M1'
     )
     
-    # Warning threshold
-    fig.add_hline(
-        y=0.08, 
-        line_dash="dash", 
-        line_color="#f59e0b", 
-        line_width=5,
-        annotation_text="WARNING 8%", 
-        annotation_position="right",
-        annotation_font_size=24,
-        annotation_font_color="#f59e0b",
-        annotation_font_weight=700
+    # Different y-axis ranges for each channel
+    fig.update_yaxes(
+        tickformat='.0%', showgrid=True, gridcolor='#e5e7eb',
+        tickfont=dict(size=20, color='#374151', weight=700),
+        title_text="Return Rate %", title_font=dict(size=24, color='#1f2937', weight=700),
+        range=[0, 0.12], row=1, col=1  # Amazon scale
     )
-    
-    # Target line
-    fig.add_hline(
-        y=0.05, 
-        line_dash="dot", 
-        line_color="#10b981", 
-        line_width=4,
-        annotation_text="TARGET 5%", 
-        annotation_position="right",
-        annotation_font_size=22,
-        annotation_font_color="#10b981",
-        annotation_font_weight=700
+    fig.update_yaxes(
+        tickformat='.1%', showgrid=True, gridcolor='#e5e7eb',
+        tickfont=dict(size=20, color='#374151', weight=700),
+        title_text="Return Rate %", title_font=dict(size=24, color='#1f2937', weight=700),
+        range=[0, 0.04], row=1, col=2  # B2B scale
     )
     
     fig.update_layout(
         height=500,
-        margin=dict(l=120, r=120, t=50, b=80),
-        xaxis=dict(
-            showgrid=True,
-            gridcolor='#e5e7eb',
-            tickfont=dict(size=20, color='#374151', weight=600),
-            tickformat='%b<br>%Y',
-            dtick='M1'  # Show every month
-        ),
-        yaxis=dict(
-            tickformat='.0%',
-            showgrid=True,
-            gridcolor='#e5e7eb',
-            tickfont=dict(size=24, color='#374151', weight=700),
-            title=dict(text="Return Rate %", font=dict(size=28, color='#1f2937', weight=700)),
-            range=[0, max(0.12, data['value'].max() * 1.1)]  # Always show up to at least 12%
-        ),
-        hovermode='x unified',
+        margin=dict(l=100, r=100, t=80, b=60),
         plot_bgcolor='white',
         paper_bgcolor='white',
         font=dict(size=20, color='#1f2937'),
-        showlegend=False
+        showlegend=False,
+        title_font_size=28
     )
     
     return fig
@@ -663,10 +769,10 @@ def main():
             </div>
         """, unsafe_allow_html=True)
     
-    # Return Rate
+    # Return Rate - Show Amazon as primary
     with col2:
-        if 'Overall Return Rate' in metrics:
-            return_data = metrics['Overall Return Rate']
+        if 'Overall Return Rate - Amazon' in metrics:
+            return_data = metrics['Overall Return Rate - Amazon']
             return_rate = return_data['value']
             
             if return_rate > 0.10:
@@ -688,15 +794,22 @@ def main():
             else:
                 change_html = '<span style="color: #6b7280;">No YoY Data</span>'
             
+            # Also show B2B rate if available
+            b2b_info = ""
+            if 'Overall Return Rate - B2B' in metrics:
+                b2b_rate = metrics['Overall Return Rate - B2B']['value']
+                b2b_info = f'<div style="font-size: 1.5rem; color: #6b7280; margin-top: 1rem;">B2B: {b2b_rate:.1%}</div>'
+            
             st.markdown(f"""
                 <div class="tv-metric-card {card_class}">
                     <div class="tv-metric-value" style="color: {value_color};">
                         {return_rate:.1%}
                     </div>
-                    <div class="tv-metric-label">Return Rate</div>
+                    <div class="tv-metric-label">Amazon Return Rate</div>
                     <div class="tv-metric-change">
                         {change_html}
                     </div>
+                    {b2b_info}
                 </div>
             """, unsafe_allow_html=True)
     
@@ -795,9 +908,9 @@ def main():
     
     # RETURN RATE TREND CHART
     st.markdown('<div class="tv-chart-container">', unsafe_allow_html=True)
-    st.markdown('<h2 class="tv-chart-title">📈 RETURN RATE TREND - LAST 12 MONTHS</h2>', unsafe_allow_html=True)
+    st.markdown('<h2 class="tv-chart-title">📈 RETURN RATE TRENDS BY CHANNEL - LAST 12 MONTHS</h2>', unsafe_allow_html=True)
     
-    return_chart = create_tv_return_rate_chart(metrics)
+    return_chart = create_tv_return_rate_chart(df)
     if return_chart:
         st.plotly_chart(return_chart, use_container_width=True, config={'displayModeBar': False})
     
