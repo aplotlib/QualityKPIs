@@ -8,6 +8,7 @@ from typing import List, Dict, Optional, Tuple
 import numpy as np
 import re
 import io
+import time
 
 # --- Dependency Checks ---
 try:
@@ -34,46 +35,119 @@ st.markdown("""
 <style>
     @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap');
     html, body, [class*="st-"] { font-family: 'Inter', sans-serif; }
-    .main .block-container { padding: 2rem; }
-    h1 { text-align: center; font-weight: 700; }
-    .metric-card {
-        background: white;
+    .main .block-container { padding: 2rem 3rem; max-width: 1400px; }
+    h1 { text-align: center; font-weight: 700; margin-bottom: 0.5rem; }
+    h2 { font-weight: 600; margin-top: 2rem; margin-bottom: 1rem; }
+    h3 { font-weight: 600; margin-bottom: 0.5rem; }
+    
+    /* Metric styling */
+    div[data-testid="metric-container"] {
+        background-color: #f8fafc;
+        border: 1px solid #e2e8f0;
+        padding: 1.2rem;
         border-radius: 12px;
-        padding: 1.5rem;
-        box-shadow: 0 2px 8px rgba(0,0,0,0.08);
-        border: 1px solid #e5e7eb;
-        height: 100%;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+        transition: all 0.3s ease;
     }
+    
+    div[data-testid="metric-container"]:hover {
+        box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+        transform: translateY(-2px);
+    }
+    
+    div[data-testid="metric-container"] > div[data-testid="metric-label"] {
+        font-size: 0.9rem;
+        font-weight: 500;
+        color: #64748b;
+    }
+    
+    div[data-testid="metric-container"] > div[data-testid="metric-value"] {
+        font-size: 2rem;
+        font-weight: 700;
+        margin: 0.5rem 0;
+    }
+    
+    div[data-testid="metric-container"] > div[data-testid="metric-delta"] {
+        font-size: 0.85rem;
+        font-weight: 600;
+    }
+    
+    /* Insight cards */
     .insight-card {
-        background: #f0f9ff;
+        background: #eff6ff;
         border-left: 4px solid #3b82f6;
         padding: 1rem;
         border-radius: 0 8px 8px 0;
-        margin: 0.5rem 0;
+        margin: 0.75rem 0;
+        font-size: 0.95rem;
+        line-height: 1.6;
     }
+    
     .action-card {
         background: #f0fdf4;
         border-left: 4px solid #10b981;
         padding: 1rem;
         border-radius: 0 8px 8px 0;
-        margin: 0.5rem 0;
+        margin: 0.75rem 0;
+        font-size: 0.95rem;
+        line-height: 1.6;
     }
+    
     .warning-card {
         background: #fef3c7;
         border-left: 4px solid #f59e0b;
         padding: 1rem;
         border-radius: 0 8px 8px 0;
-        margin: 0.5rem 0;
+        margin: 0.75rem 0;
+        font-size: 0.95rem;
+        line-height: 1.6;
     }
-    div[data-testid="metric-container"] {
-        background-color: white;
-        padding: 1rem;
-        border-radius: 8px;
-        box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+    
+    /* Section headers */
+    .section-header {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        margin: 2rem 0 1rem 0;
+        padding-bottom: 0.5rem;
+        border-bottom: 2px solid #e2e8f0;
     }
-    .trend-up { color: #10b981; }
-    .trend-down { color: #ef4444; }
-    .trend-neutral { color: #6b7280; }
+    
+    /* Trend indicators */
+    .trend-up { color: #10b981; font-size: 1.2rem; margin: 0; }
+    .trend-down { color: #ef4444; font-size: 1.2rem; margin: 0; }
+    .trend-neutral { color: #6b7280; font-size: 1.2rem; margin: 0; }
+    
+    /* Improve column spacing */
+    .stColumn > div { padding: 0 0.5rem; }
+    
+    /* Summary cards */
+    .summary-metric {
+        background: white;
+        border-radius: 12px;
+        padding: 1.5rem;
+        text-align: center;
+        border: 1px solid #e2e8f0;
+        height: 100%;
+    }
+    
+    .summary-metric h4 {
+        font-size: 0.9rem;
+        color: #64748b;
+        margin-bottom: 0.5rem;
+        font-weight: 500;
+    }
+    
+    .summary-metric .value {
+        font-size: 2rem;
+        font-weight: 700;
+        color: #1e293b;
+    }
+    
+    /* Hide Streamlit elements */
+    #MainMenu {visibility: hidden;}
+    footer {visibility: hidden;}
+    header {visibility: hidden;}
 </style>
 """, unsafe_allow_html=True)
 
@@ -198,7 +272,7 @@ class AIQualityAnalyzer:
         
         try:
             response = self.anthropic_client.messages.create(
-                model="claude-3-haiku-20240307",  # Using Haiku which is reliable
+                model="claude-3-haiku-20240307",
                 messages=[{"role": "user", "content": prompt}],
                 max_tokens=1000,
                 temperature=0.7
@@ -233,7 +307,7 @@ class AIQualityAnalyzer:
         
         try:
             response = self.openai_client.chat.completions.create(
-                model="gpt-3.5-turbo",  # Using 3.5 for reliability
+                model="gpt-3.5-turbo",
                 messages=[{"role": "user", "content": prompt}],
                 response_format={"type": "json_object"},
                 temperature=0.7
@@ -325,20 +399,37 @@ def create_metric_dashboard(df: pd.DataFrame, metrics_summary: Dict) -> None:
     
     # Group metrics by type
     categories = {
-        "📦 Quality Metrics": ['Overall Return Rate'],
-        "🔍 Operations": ['Percent Order Inspected', 'Orders Inspected', 'Total Orders'],
-        "💰 Financial": ['Total Cost of Inspection', 'Average Cost per Inspection']
+        "📦 Quality Metrics": {
+            'metrics': ['Overall Return Rate'],
+            'description': 'Product quality and customer satisfaction'
+        },
+        "🔍 Operations": {
+            'metrics': ['Percent Order Inspected', 'Orders Inspected', 'Total Orders'],
+            'description': 'Operational efficiency and throughput'
+        },
+        "💰 Financial": {
+            'metrics': ['Total Cost of Inspection', 'Average Cost per Inspection'],
+            'description': 'Cost management and efficiency'
+        }
     }
     
-    for category, metric_list in categories.items():
-        st.markdown(f"### {category}")
+    for category, info in categories.items():
+        metric_list = info['metrics']
+        available_metrics = [m for m in metric_list if m in metrics_summary]
         
-        cols = st.columns(len([m for m in metric_list if m in metrics_summary]))
-        col_idx = 0
-        
-        for metric in metric_list:
-            if metric in metrics_summary:
-                with cols[col_idx]:
+        if available_metrics:
+            # Section header
+            st.markdown(f"""
+                <div class="section-header">
+                    <h3 style="margin: 0;">{category}</h3>
+                    <span style="color: #64748b; font-size: 0.9rem;">{info['description']}</span>
+                </div>
+            """, unsafe_allow_html=True)
+            
+            cols = st.columns(len(available_metrics))
+            
+            for idx, metric in enumerate(available_metrics):
+                with cols[idx]:
                     data = metrics_summary[metric]
                     
                     # Format value based on type
@@ -352,40 +443,81 @@ def create_metric_dashboard(df: pd.DataFrame, metrics_summary: Dict) -> None:
                     else:
                         value_str = f"{data['current_value']:,.0f}"
                     
-                    # Create metric
+                    # Determine delta color
                     yoy = data.get('yoy_change')
+                    lower_is_better = any(term in metric.lower() for term in ['cost', 'return', 'defect', 'rework', 'rate'])
+                    
                     if yoy is not None:
-                        delta = f"{yoy:+.1%} YoY"
+                        is_good = (yoy < 0 and lower_is_better) or (yoy > 0 and not lower_is_better)
+                        delta = f"{'↑' if yoy > 0 else '↓'} {abs(yoy):.1%} YoY"
+                        delta_color = "normal" if is_good else "inverse"
                     else:
                         delta = "No YoY data"
+                        delta_color = "off"
                     
+                    # Create metric
                     st.metric(
                         label=metric,
                         value=value_str,
-                        delta=delta
+                        delta=delta,
+                        delta_color=delta_color
                     )
                     
                     # Add mini chart
                     metric_data = df[df['Metric'] == metric].tail(12)
-                    fig = go.Figure()
-                    fig.add_trace(go.Scatter(
-                        x=metric_data['Date'],
-                        y=metric_data['Value'],
-                        mode='lines',
-                        line=dict(color='#3b82f6', width=2),
-                        showlegend=False
-                    ))
-                    fig.update_layout(
-                        height=100,
-                        margin=dict(l=0, r=0, t=0, b=0),
-                        xaxis=dict(visible=False),
-                        yaxis=dict(visible=False),
-                        paper_bgcolor='rgba(0,0,0,0)',
-                        plot_bgcolor='rgba(0,0,0,0)'
-                    )
-                    st.plotly_chart(fig, use_container_width=True)
-                
-                col_idx += 1
+                    
+                    if len(metric_data) > 1:
+                        fig = go.Figure()
+                        
+                        # Determine if metric should decrease (lower is better)
+                        lower_is_better = any(term in metric.lower() for term in ['cost', 'return', 'defect', 'rework', 'rate'])
+                        
+                        # Set color based on trend
+                        if len(metric_data) >= 2:
+                            if lower_is_better:
+                                color = '#ef4444' if metric_data.iloc[-1]['Value'] > metric_data.iloc[0]['Value'] else '#10b981'
+                            else:
+                                color = '#10b981' if metric_data.iloc[-1]['Value'] > metric_data.iloc[0]['Value'] else '#ef4444'
+                        else:
+                            color = '#3b82f6'
+                        
+                        fig.add_trace(go.Scatter(
+                            x=metric_data['Date'],
+                            y=metric_data['Value'],
+                            mode='lines',
+                            line=dict(color=color, width=3),
+                            fill='tozeroy',
+                            fillcolor=f'rgba({int(color[1:3], 16)}, {int(color[3:5], 16)}, {int(color[5:7], 16)}, 0.1)',
+                            showlegend=False
+                        ))
+                        
+                        # Add min/max points
+                        min_point = metric_data.loc[metric_data['Value'].idxmin()]
+                        max_point = metric_data.loc[metric_data['Value'].idxmax()]
+                        
+                        fig.add_trace(go.Scatter(
+                            x=[min_point['Date'], max_point['Date']],
+                            y=[min_point['Value'], max_point['Value']],
+                            mode='markers',
+                            marker=dict(
+                                size=6,
+                                color=['#ef4444', '#10b981'] if lower_is_better else ['#10b981', '#ef4444']
+                            ),
+                            showlegend=False
+                        ))
+                        
+                        fig.update_layout(
+                            height=120,
+                            margin=dict(l=0, r=0, t=10, b=0),
+                            xaxis=dict(visible=False, fixedrange=True),
+                            yaxis=dict(visible=False, fixedrange=True),
+                            paper_bgcolor='rgba(0,0,0,0)',
+                            plot_bgcolor='rgba(0,0,0,0)',
+                            dragmode=False,
+                            hovermode=False
+                        )
+                        
+                        st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False})
 
 def create_main_chart(df: pd.DataFrame, metric: str, chart_type: str = "trend") -> go.Figure:
     """Create main analysis chart"""
@@ -437,17 +569,31 @@ def create_main_chart(df: pd.DataFrame, metric: str, chart_type: str = "trend") 
         ))
         
         # Add annotations for significant changes
+        significant_changes = []
         for idx, row in metric_data.iterrows():
             if pd.notna(row['MoM_Change']) and abs(row['MoM_Change']) > 0.15:
+                significant_changes.append({
+                    'x': row['Date'],
+                    'y': row['Value'],
+                    'change': row['MoM_Change']
+                })
+        
+        # Add only the most significant changes to avoid clutter
+        if significant_changes:
+            significant_changes.sort(key=lambda x: abs(x['change']), reverse=True)
+            for change in significant_changes[:3]:  # Show top 3 changes
                 fig.add_annotation(
-                    x=row['Date'],
-                    y=row['Value'],
-                    text=f"{row['MoM_Change']:+.0%}",
+                    x=change['x'],
+                    y=change['y'],
+                    text=f"{change['change']:+.0%}",
                     showarrow=True,
                     arrowhead=2,
                     arrowsize=1,
                     arrowwidth=2,
-                    arrowcolor="#6b7280"
+                    arrowcolor="#6b7280",
+                    bgcolor="white",
+                    bordercolor="#6b7280",
+                    borderwidth=1
                 )
         
         fig.update_layout(
@@ -462,22 +608,41 @@ def create_main_chart(df: pd.DataFrame, metric: str, chart_type: str = "trend") 
     is_percent = any(term in metric.lower() for term in ['rate', 'percent', '%'])
     is_currency = any(term in metric.lower() for term in ['cost', '$'])
     
-    if is_percent:
-        fig.update_yaxis(tickformat='.1%')
-    elif is_currency:
-        fig.update_yaxis(tickformat='$,.0f')
+    yaxis_format = '.1%' if is_percent else ('$,.0f' if is_currency else ',.0f')
     
     fig.update_layout(
+        yaxis=dict(tickformat=yaxis_format),
         template='plotly_white',
-        font=dict(family="Inter, sans-serif")
+        font=dict(family="Inter, sans-serif"),
+        plot_bgcolor='rgba(0,0,0,0)',
+        showlegend=True,
+        legend=dict(
+            orientation="h",
+            yanchor="bottom",
+            y=1.02,
+            xanchor="right",
+            x=1
+        )
     )
     
     return fig
 
 # --- MAIN APP ---
 def main():
-    st.title("📊 Quality Intelligence Dashboard")
-    st.markdown("Comprehensive quality metrics analysis with AI-powered insights")
+    # Custom header
+    st.markdown("""
+        <h1 style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                   -webkit-background-clip: text;
+                   -webkit-text-fill-color: transparent;
+                   font-size: 3rem;
+                   text-align: center;
+                   margin-bottom: 0;">
+            Quality Intelligence Dashboard
+        </h1>
+        <p style="text-align: center; color: #64748b; font-size: 1.1rem; margin-top: 0;">
+            Comprehensive quality metrics analysis with AI-powered insights
+        </p>
+    """, unsafe_allow_html=True)
     
     # Check for API keys
     openai_key = st.secrets.get("OPENAI_API_KEY", "")
@@ -485,46 +650,91 @@ def main():
     
     # Sidebar
     with st.sidebar:
-        st.markdown("### 🤖 AI Status")
+        st.markdown("""
+            <h3 style="margin-bottom: 1rem;">🤖 AI Analysis</h3>
+        """, unsafe_allow_html=True)
         
-        if openai_key:
-            st.success("✅ OpenAI Connected")
-        else:
-            st.info("ℹ️ OpenAI Not Configured")
-            
-        if anthropic_key:
-            st.success("✅ Claude Connected")
-        else:
-            st.info("ℹ️ Claude Not Configured")
+        # API Status
+        col1, col2 = st.columns(2)
+        with col1:
+            if openai_key:
+                st.success("OpenAI ✓")
+            else:
+                st.info("OpenAI ✗")
+                
+        with col2:
+            if anthropic_key:
+                st.success("Claude ✓")
+            else:
+                st.info("Claude ✗")
         
         if not openai_key and not anthropic_key:
-            st.warning("Running in local analysis mode")
+            st.warning("Local mode active")
         
         st.markdown("---")
-        st.markdown("### 📈 Dashboard Info")
-        st.info(
-            "This dashboard analyzes quality metrics including:\n"
-            "• Return rates\n"
-            "• Inspection coverage\n"
-            "• Cost efficiency\n"
-            "• Order volumes"
-        )
+        
+        # Dashboard info
+        st.markdown("""
+            <h4 style="margin-bottom: 0.5rem;">📊 Metrics Tracked</h4>
+            <ul style="font-size: 0.9rem; color: #64748b;">
+                <li>Return rates & quality</li>
+                <li>Inspection coverage</li>
+                <li>Operational efficiency</li>
+                <li>Cost management</li>
+            </ul>
+            
+            <h4 style="margin-top: 1.5rem; margin-bottom: 0.5rem;">🎯 Key Features</h4>
+            <ul style="font-size: 0.9rem; color: #64748b;">
+                <li>AI-powered insights</li>
+                <li>Year-over-year analysis</li>
+                <li>Trend detection</li>
+                <li>Executive summary</li>
+            </ul>
+        """, unsafe_allow_html=True)
     
     # Initialize analyzer
     analyzer = AIQualityAnalyzer(openai_key, anthropic_key)
     
     # Load data
+    progress_placeholder = st.empty()
+    
     try:
+        # Initial load
         with open('quality_data_clean.csv', 'r') as f:
             csv_content = f.read()
         
-        df = analyzer.parse_quality_data(csv_content)
-        if df is None:
-            st.stop()
+        # Show progress
+        with progress_placeholder.container():
+            progress_bar = st.progress(0)
+            status_text = st.empty()
+            
+            status_text.text("🔄 Parsing data structure...")
+            progress_bar.progress(25)
+            time.sleep(0.3)
+            
+            df = analyzer.parse_quality_data(csv_content)
+            if df is None:
+                st.stop()
+            
+            status_text.text("📈 Calculating metrics...")
+            progress_bar.progress(50)
+            time.sleep(0.3)
+            
+            # Prepare data
+            df = prepare_data(df)
+            
+            status_text.text("🧮 Computing summaries...")
+            progress_bar.progress(75)
+            time.sleep(0.3)
+            
+            metrics_summary = calculate_summary_metrics(df)
+            
+            status_text.text("✅ Analysis complete!")
+            progress_bar.progress(100)
+            time.sleep(0.5)
         
-        # Prepare data
-        df = prepare_data(df)
-        metrics_summary = calculate_summary_metrics(df)
+        # Clear progress
+        progress_placeholder.empty()
         
     except FileNotFoundError:
         st.error("❌ quality_data_clean.csv not found!")
@@ -537,38 +747,65 @@ def main():
     # Display insights
     st.markdown("## 💡 Intelligent Insights")
     
-    with st.spinner("Analyzing quality metrics..."):
+    with st.spinner("🤖 Analyzing quality metrics..."):
         insights = analyzer.generate_insights_with_ai(metrics_summary)
     
-    # Display insights in cards
-    col1, col2, col3 = st.columns([1, 1, 1])
+    # Create a container for insights
+    insights_container = st.container()
     
-    with col1:
-        st.markdown("#### 🎯 Key Findings")
-        for finding in insights.get("key_findings", ["No findings available"]):
-            st.markdown(f"""
-            <div class="insight-card">
-                {finding}
-            </div>
+    with insights_container:
+        # Display insights in an elegant grid
+        col1, col2, col3 = st.columns([1.1, 1.1, 0.8])
+        
+        with col1:
+            st.markdown("""
+                <h4 style="color: #3b82f6; margin-bottom: 1rem;">
+                    <span style="font-size: 1.5rem;">🎯</span> Key Findings
+                </h4>
             """, unsafe_allow_html=True)
-    
-    with col2:
-        st.markdown("#### ✅ Recommended Actions")
-        for action in insights.get("actions", ["No actions available"]):
-            st.markdown(f"""
-            <div class="action-card">
-                {action}
-            </div>
+            
+            for finding in insights.get("key_findings", ["Analyzing data..."]):
+                st.markdown(f"""
+                <div class="insight-card">
+                    {finding}
+                </div>
+                """, unsafe_allow_html=True)
+        
+        with col2:
+            st.markdown("""
+                <h4 style="color: #10b981; margin-bottom: 1rem;">
+                    <span style="font-size: 1.5rem;">✅</span> Recommended Actions
+                </h4>
             """, unsafe_allow_html=True)
-    
-    with col3:
-        st.markdown("#### ⚠️ Warnings")
-        for warning in insights.get("warnings", ["No warnings"]):
-            st.markdown(f"""
-            <div class="warning-card">
-                {warning}
-            </div>
+            
+            for action in insights.get("actions", ["Processing recommendations..."]):
+                st.markdown(f"""
+                <div class="action-card">
+                    {action}
+                </div>
+                """, unsafe_allow_html=True)
+        
+        with col3:
+            st.markdown("""
+                <h4 style="color: #f59e0b; margin-bottom: 1rem;">
+                    <span style="font-size: 1.5rem;">⚠️</span> Alerts
+                </h4>
             """, unsafe_allow_html=True)
+            
+            warnings = insights.get("warnings", [])
+            if warnings:
+                for warning in warnings:
+                    st.markdown(f"""
+                    <div class="warning-card">
+                        {warning}
+                    </div>
+                    """, unsafe_allow_html=True)
+            else:
+                st.markdown("""
+                <div style="color: #64748b; font-size: 0.9rem; padding: 1rem;">
+                    No critical issues detected
+                </div>
+                """, unsafe_allow_html=True)
     
     st.markdown("---")
     
@@ -577,6 +814,15 @@ def main():
     latest_date = df['Date'].max()
     st.caption(f"Latest data: {latest_date.strftime('%B %Y')}")
     
+    # Update sidebar with data freshness
+    with st.sidebar:
+        st.markdown(f"""
+            <div style="margin-top: 2rem; padding: 1rem; background: #f1f5f9; border-radius: 8px;">
+                <small style="color: #64748b;">Data freshness:</small><br>
+                <strong>{latest_date.strftime('%B %Y')}</strong>
+            </div>
+        """, unsafe_allow_html=True)
+    
     create_metric_dashboard(df, metrics_summary)
     
     st.markdown("---")
@@ -584,61 +830,113 @@ def main():
     # Detailed Analysis
     st.markdown("## 🔍 Detailed Analysis")
     
-    col1, col2, col3 = st.columns([2, 1, 1])
+    # Create a more elegant selector
+    analysis_container = st.container()
     
-    with col1:
-        selected_metric = st.selectbox(
-            "Select metric to analyze:",
-            options=sorted(df['Metric'].unique()),
-            index=0
-        )
-    
-    with col2:
-        chart_type = st.radio(
-            "Chart type:",
-            ["Trend", "YoY Comparison"],
-            horizontal=True
-        )
-    
-    with col3:
-        # Show metric info
-        if selected_metric in metrics_summary:
-            data = metrics_summary[selected_metric]
-            trend = data.get('trend', 'neutral')
-            if trend == 'up':
-                st.markdown('<h3 class="trend-up">↑ Trending Up</h3>', unsafe_allow_html=True)
-            elif trend == 'down':
-                st.markdown('<h3 class="trend-down">↓ Trending Down</h3>', unsafe_allow_html=True)
-            else:
-                st.markdown('<h3 class="trend-neutral">→ Stable</h3>', unsafe_allow_html=True)
+    with analysis_container:
+        col1, col2, col3 = st.columns([3, 1.5, 1.5])
+        
+        with col1:
+            selected_metric = st.selectbox(
+                "Select metric to analyze:",
+                options=sorted(df['Metric'].unique()),
+                index=0,
+                help="Choose a metric to see detailed trends and analysis"
+            )
+        
+        with col2:
+            chart_type = st.radio(
+                "Visualization:",
+                ["📈 Trend", "📊 YoY Compare"],
+                horizontal=True,
+                help="Toggle between trend analysis and year-over-year comparison"
+            )
+        
+        with col3:
+            # Show current status
+            if selected_metric in metrics_summary:
+                data = metrics_summary[selected_metric]
+                trend = data.get('trend', 'neutral')
+                
+                # Determine if metric is good or bad
+                lower_is_better = any(term in selected_metric.lower() for term in ['cost', 'return', 'defect', 'rework', 'rate'])
+                current_val = data.get('current_value', 0)
+                
+                if trend == 'up':
+                    if lower_is_better:
+                        st.markdown('<div style="text-align: center; padding: 1rem;"><h3 class="trend-down">↑ Worsening</h3></div>', unsafe_allow_html=True)
+                    else:
+                        st.markdown('<div style="text-align: center; padding: 1rem;"><h3 class="trend-up">↑ Improving</h3></div>', unsafe_allow_html=True)
+                elif trend == 'down':
+                    if lower_is_better:
+                        st.markdown('<div style="text-align: center; padding: 1rem;"><h3 class="trend-up">↓ Improving</h3></div>', unsafe_allow_html=True)
+                    else:
+                        st.markdown('<div style="text-align: center; padding: 1rem;"><h3 class="trend-down">↓ Worsening</h3></div>', unsafe_allow_html=True)
+                else:
+                    st.markdown('<div style="text-align: center; padding: 1rem;"><h3 class="trend-neutral">→ Stable</h3></div>', unsafe_allow_html=True)
     
     # Display chart
     fig = create_main_chart(
         df, 
         selected_metric, 
-        "comparison" if chart_type == "YoY Comparison" else "trend"
+        "comparison" if "YoY" in chart_type else "trend"
     )
     st.plotly_chart(fig, use_container_width=True)
     
     # Data table
-    with st.expander("📋 View Data Table"):
+    with st.expander("📋 View Detailed Data", expanded=False):
+        st.markdown(f"**{selected_metric} - Last 12 Months**")
+        
         display_df = df[df['Metric'] == selected_metric][
             ['Date', 'Value', 'MoM_Change', 'YoY_Change']
         ].sort_values('Date', ascending=False).head(12)
         
-        # Format percentages
+        # Create a copy for display
+        display_df = display_df.copy()
+        
+        # Format date
+        display_df['Date'] = display_df['Date'].dt.strftime('%b %Y')
+        
+        # Format values based on metric type
+        is_percent = any(term in selected_metric.lower() for term in ['rate', 'percent', '%'])
+        is_currency = any(term in selected_metric.lower() for term in ['cost', '$'])
+        
+        if is_percent:
+            display_df['Value'] = display_df['Value'].map(lambda x: f"{x:.1%}")
+        elif is_currency:
+            display_df['Value'] = display_df['Value'].map(lambda x: f"${x:,.2f}")
+        else:
+            display_df['Value'] = display_df['Value'].map(lambda x: f"{x:,.0f}")
+        
+        # Format changes with % symbol
         display_df['MoM_Change'] = display_df['MoM_Change'].map(
-            lambda x: f"{x:.1%}" if pd.notna(x) else "-"
+            lambda x: f"{x:+.1%}" if pd.notna(x) else "-"
         )
         display_df['YoY_Change'] = display_df['YoY_Change'].map(
-            lambda x: f"{x:.1%}" if pd.notna(x) else "-"
+            lambda x: f"{x:+.1%}" if pd.notna(x) else "-"
         )
         
-        st.dataframe(display_df, use_container_width=True, hide_index=True)
+        # Rename columns for clarity
+        display_df = display_df.rename(columns={
+            'Date': 'Month',
+            'MoM_Change': 'Month-over-Month',
+            'YoY_Change': 'Year-over-Year'
+        })
+        
+        # Display with custom styling
+        st.dataframe(
+            display_df,
+            use_container_width=True,
+            hide_index=True
+        )
     
     # Footer summary
     st.markdown("---")
-    st.markdown("### 🎯 Quick Summary")
+    st.markdown("""
+        <h3 style="text-align: center; margin-bottom: 2rem;">
+            🎯 Executive Summary
+        </h3>
+    """, unsafe_allow_html=True)
     
     col1, col2, col3, col4 = st.columns(4)
     
@@ -653,16 +951,37 @@ def main():
     avg_cost = metrics_summary.get('Average Cost per Inspection', {}).get('current_value', 0)
     
     with col1:
-        st.metric("Quality Score", f"{quality_score:.0f}/100")
+        st.markdown("""
+        <div class="summary-metric">
+            <h4>Quality Score</h4>
+            <div class="value" style="color: #10b981;">""" + f"{quality_score:.0f}/100" + """</div>
+        </div>
+        """, unsafe_allow_html=True)
     
     with col2:
-        st.metric("Inspection Coverage", f"{inspection_rate:.0%}")
+        color = "#10b981" if inspection_rate > 0.85 else "#f59e0b"
+        st.markdown(f"""
+        <div class="summary-metric">
+            <h4>Inspection Coverage</h4>
+            <div class="value" style="color: {color};">""" + f"{inspection_rate:.0%}" + """</div>
+        </div>
+        """, unsafe_allow_html=True)
     
     with col3:
-        st.metric("Monthly Orders", f"{total_orders:,.0f}")
+        st.markdown("""
+        <div class="summary-metric">
+            <h4>Monthly Orders</h4>
+            <div class="value">""" + f"{total_orders:,.0f}" + """</div>
+        </div>
+        """, unsafe_allow_html=True)
     
     with col4:
-        st.metric("Avg Inspection Cost", f"${avg_cost:.2f}")
+        st.markdown("""
+        <div class="summary-metric">
+            <h4>Cost per Inspection</h4>
+            <div class="value">""" + f"${avg_cost:.2f}" + """</div>
+        </div>
+        """, unsafe_allow_html=True)
 
 if __name__ == "__main__":
     main()
